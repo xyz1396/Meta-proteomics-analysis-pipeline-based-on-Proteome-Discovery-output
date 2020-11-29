@@ -1,0 +1,325 @@
+---
+title: "Get Identified proteins, Coverage, Length, UpsetR, Venn"
+author: "xyz"
+date: "2020/10/26"
+output: html_document
+---
+
+### Filter by q-value
+
+```{r}
+library(openxlsx)
+library(dplyr)
+df <- read.xlsx("../data/PanamaNCBI2ProteinsFix.xlsx")
+df2 <- readRDS("../data/panamameMeta2ProteinsFix.xlsx.rds")
+df <- filter(df, Contaminant == F, `Exp..q-value:.Combined` <= 0.01)
+df2 <- filter(df2, Contaminant == F, `Exp..q-value:.Combined` <= 0.01)
+# Using the NCBI soil microbial protein database, 20,779 proteins were detected in 4,344 groups
+paste0(
+  "Using the NCBI soil microbial protein database ",
+  nrow(df),
+  " proteins were detected ",
+  "in ",
+  sum(df$Master == "Master Protein"),
+  " groups"
+)
+# "170565 proteins were detected using the metagenomic protein database, distributed among 19,298 groups"
+paste0(
+  "using the metagenomic protein database",
+  nrow(df2),
+  "proteins were detected, ",
+  "distributed among ",
+  sum(df2$Master == "Master Protein"),
+  " groups"
+)
+df <- filter(df, Master == "Master Protein")
+df2 <- filter(df2, Master == "Master Protein")
+saveRDS(df,"../temp/ncbiMasterProtein.rds")
+saveRDS(df2,"../temp/metaMasterProtein.rds")
+```
+
+### The Statistics of identified proteins
+
+```{r}
+library(ggplot2)
+df <- readRDS("../temp/ncbiMasterProtein.rds")
+df2 <- readRDS("../temp/metaMasterProtein.rds")
+ncbiFound <- df[, 72:81]
+ncbiFound <- ncbiFound[, ] != "Not Found"
+# The master proteins identified among all samples by NCBI were 4320
+sum(rowSums(ncbiFound[, 1:8]) > 0)
+sum(rowSums(ncbiFound[, 9:10]) > 0)
+
+metaFound <- df2[, 165:174]
+metaFound <- metaFound[, ] != "Not Found"
+# The master proteins identified among all samples were 18947
+sum(sum(rowSums(metaFound[, 1:8]) > 0))
+sum(rowSums(metaFound[, 9:10]) > 0)
+
+# Plot
+tempDf <- read.table(
+  text = "
+Database,p,Count
+Public,Protein groups,4320
+Public,Proteins,20779
+Meta,Protein groups,18947
+Meta,Proteins,170565",
+header = T,
+sep = ",",
+stringsAsFactors = F
+)
+# write.xlsx(tempDf,"The amount of identified proteins.xlsx")
+
+ggplot(tempDf, aes(x = p, y = Count, fill = Database)) +
+  geom_bar(
+    stat = "identity",
+    position = "dodge",
+    width = 0.8,
+    col = 'black'
+  ) +
+  # Add numbers
+  geom_text(
+    aes(label = Count),
+    position = position_dodge(width = 0.8),
+    vjust = -0.25,
+    size = 6
+  ) +
+  ylab("Number of identified \n protein groups/proteins") +
+  theme(
+    axis.title.x = element_blank(),
+    text = element_text(size = 30),
+    axis.text.x = element_text(colour = "black")
+  ) +
+  ggsave(
+    paste0("../figure/The amount of identified proteins", ".png"),
+    width = 10.24,
+    height = 7.68,
+    dpi = 100
+  )
+```
+
+### compare coverage and length
+
+```{r}
+library(stringr)
+library(tidyr)
+library(xlsx)
+tempDf <- data.frame(
+  Coverage = c(df$`Coverage.[%]`, df2$`Coverage.[%]`),
+  Database = rep(c("Public", "Meta"), times = c(nrow(df), nrow(df2)))
+)
+qplot(
+  Coverage,
+  data = tempDf,
+  geom = "freqpoly",
+  ylab = "Number of identified proteins",
+  binwidth = 1,
+  color = Database
+) +
+  theme(text = element_text(size = 30),
+        axis.text = element_text(colour = "black")) +
+  ggsave(
+    paste0("../figure/compare coverage", ".png"),
+    width = 10.24,
+    height = 7.68,
+    dpi = 100
+  )
+# W = 25026280, p-value < 2.2e-16
+wilcox.test(df$`Coverage.[%]`, df2$`Coverage.[%]`)
+
+freq <- data.frame(
+  Coverage = c(df$`Coverage.[%]`, df2$`Coverage.[%]`),
+  Database = rep(c("public", "meta"), times = c(nrow(df), nrow(df2)))
+)
+freq$value.cut <-
+  cut(freq$Coverage, breaks = c(0, 5, 10, 15, 20, 25, 30, 100))
+freq <- with(freq, table(value.cut, Database, useNA = 'ifany'))
+freq <- as.data.frame(freq)
+freq <- spread(freq, Database, -value.cut)
+# delete NA
+freq <- freq[-8, ]
+colnames(freq)[1] <- "Coverage Range of Proteins %"
+# freq<-rbind(freq,cbind(value.cut=freq$value.cut,prop.table(freq[,-1])))
+# write.xlsx(freq,"compare coverage.xlsx")
+
+tempDf <-
+  data.frame(Length = c(str_length(df$Sequence), str_length(df2$Sequence)),
+             Database = rep(c("Public", "Meta"), times = c(nrow(df), nrow(df2))))
+qplot(
+  Length,
+  data = tempDf,
+  geom = "freqpoly",
+  ylab = "Number of identified proteins",
+  binwidth = 1,
+  color = Database
+) +
+  theme(text = element_text(size = 30),
+        axis.text = element_text(colour = "black")) +
+  ggsave(
+    paste0(
+      "../figure/compare length of identified proteins",
+      ".png"
+    ),
+    width = 10.24,
+    height = 7.68,
+    dpi = 100
+  )
+# Total number of proteins
+# public 4320; meta 18947
+# Total length of proteins
+# public 1693559; meta 7068297
+sum(str_length(df$Sequence))
+sum(str_length(df2$Sequence))
+# Average number of amino acids in a protein
+# public 389.8616; meta 366.271
+mean(str_length(df$Sequence))
+mean(str_length(df2$Sequence))
+# p-value < 2.2e-16
+wilcox.test(str_length(df$Sequence), str_length(df2$Sequence))
+freq <-
+  data.frame(Length = c(str_length(df$Sequence), str_length(df2$Sequence)),
+             Database = rep(c("public", "meta"), times = c(nrow(df), nrow(df2))))
+freq$value.cut <-
+  cut(freq$Length,
+      breaks = c(0, 25, 50, 100, 200, 400, 800, 1600, 3200, 12200))
+freq <- with(freq, table(value.cut, Database))
+freq <- as.data.frame(freq)
+freq <- spread(freq, Database, -value.cut)
+freq <- cbind(freq, prop.table(as.matrix(freq[, -1]), 2))
+colnames(freq)[1] <- "Length Range of Proteins %"
+write.xlsx(freq, "../table/compare length range of proteins.xlsx")
+```
+
+### upset plot
+
+```{r}
+library(UpSetR)
+plotUpset <- function(tempDf,
+                      textScale,
+                      set_size.angles,
+                      fileName) {
+  drawDf <-
+    as.data.frame(matrix(as.numeric(tempDf), ncol = ncol(tempDf)))
+  name <- as.list(colnames(tempDf))
+  colnames(drawDf) <- colnames(tempDf)
+  png(
+    file = paste0(fileName, ".png"),
+    width = 1280,
+    height = 720,
+    units = "px"
+  )
+  print(
+    upset(
+      drawDf,
+      order.by = c("degree", "freq"),
+      decreasing = c(TRUE, TRUE),
+      sets = colnames(tempDf),
+      keep.order = T,
+      # Add a highlight of the intersection between biological and technical repetitions.
+      queries = list(
+        list(
+          query = intersects,
+          params = name,
+          color = "red",
+          active = TRUE
+        ),
+        list(
+          query = intersects,
+          params = name[1:2],
+          color = "green",
+          active = TRUE
+        ),
+        list(
+          query = intersects,
+          params = name[3:4],
+          color = "blue",
+          active = TRUE
+        )
+      ),
+      text.scale = textScale,
+      # same y scale
+      mainbar.y.max = 9000,
+      # bug, no effect
+      set_size.angles = set_size.angles
+    )
+  )
+  dev.off()
+}
+
+# public p-rich 4 repetitions in the same scale
+tempDf <- ncbiFound[, 4:1]
+colnames(tempDf) <- paste0("Repeat", 4:1)
+plotUpset(tempDf, 3, 90, "../figure/public p-rich 4 repetitions in the same scale")
+
+# public p-deficiency 4 repetitions in the same scale
+tempDf <- ncbiFound[, 8:5]
+colnames(tempDf) <- paste0("Repeat", 4:1)
+plotUpset(tempDf, 3, 90, "../figure/public p-deficiency 4 repetitions in the same scale")
+
+# meta p-rich 4 repetitions in the same scale
+tempDf <- metaFound[, 4:1]
+colnames(tempDf) <- paste0("Repeat", 4:1)
+plotUpset(tempDf, 3, 90, "../figure/meta p-rich 4 repetitions in the same scale")
+
+# meta p-deficiency 4 repetitions in the same scale
+tempDf <- metaFound[, 8:5]
+colnames(tempDf) <- paste0("Repeat", 4:1)
+plotUpset(tempDf, 3, 90, "../figure/meta p-deficiency 4 repetitions in the same scale")
+
+# Show the protein detected by Public DB
+colSums(ncbiFound)
+
+# Show the protein detected by Meta DB
+colSums(metaFound)
+```
+
+### Venn Plot
+
+```{r}
+library(ggforce)
+library(limma)
+library(venneuler)
+plotVenn <- function(tempDf, fileName) {
+  # differences between different treatments
+  VennDf <- vennCounts(tempDf)
+  # convert T and F to 0,1
+  drawDf <- matrix(as.numeric(tempDf), ncol = ncol(tempDf))
+  # Use Venneuler to generate the data needed for drawing
+  drawDf <- venneuler(drawDf)
+  drawDf <-
+    data.frame(
+      drawDf$centers,
+      diameters = drawDf$diameters,
+      labels = colnames(tempDf),
+      stringsAsFactors = FALSE
+    )
+  ggplot(drawDf) +
+    geom_circle(aes(
+      x0 = x,
+      y0 = y,
+      r = diameters / 2,
+      fill = labels
+    ), alpha = 0.7) +
+    coord_fixed() +
+    theme_void() +
+    theme(legend.position = 'bottom', text = element_text(size = 20)) +
+    labs(fill = NULL) +
+    ggsave(fileName,
+           width = 10.24,
+           height = 7.68,
+           dpi = 100)
+  return(VennDf)
+}
+tempDf <- ncbiFound[, 9:10]
+colnames(tempDf) <- c("high", "low")
+sink("../table/NCBIhighPvsLowP.txt")
+plotVenn(tempDf, "../figure/NCBIhighPvsLowP.png")
+sink()
+
+tempDf <- metaFound[, 9:10]
+colnames(tempDf) <- c("high", "low")
+sink("../table/metaHighPvsLowP.txt")
+plotVenn(tempDf, "../figure/metaHighPvsLowP.png")
+sink()
+```
+

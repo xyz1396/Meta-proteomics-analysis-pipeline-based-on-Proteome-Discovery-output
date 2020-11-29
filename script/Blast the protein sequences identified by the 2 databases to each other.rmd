@@ -1,0 +1,246 @@
+---
+title: "Blast the protein sequences identified by the 2 databases to each other For Fig. S5"
+author: "xyz"
+date: "2020/11/25"
+output: html_document
+---
+
+### extract sequence
+
+```{r}
+library(Biostrings)
+df <- readRDS("../temp/ncbiMasterProtein.rds")
+df2 <- readRDS("../temp/metaMasterProtein.rds")
+df <- df[rowSums(df[, 80:81] != "Not Found") > 0, ]
+df2 <- df2[rowSums(df2[, 173:174] != "Not Found") > 0, ]
+
+seq <- df$Sequence
+names(seq) <- df$Accession
+protein <- AAStringSet(seq)
+writeXStringSet(protein, "../temp/public.fasta")
+seq <- df2$Sequence
+names(seq) <- df2$Accession
+protein <- AAStringSet(seq)
+writeXStringSet(protein, "../temp/meta.fasta")
+```
+
+### blast
+
+```{bash eval=F}
+cd temp
+nohup blastp -query panamaMeta.fasta -subject panamaNCBI.fasta -outfmt 5 -evalue 1e-6 -out "meta2NCBI.xml" &>meta2NCBI.log &
+nohup blastp -query panamaNCBI.fasta -subject panamaMeta.fasta -outfmt 5 -evalue 1e-6 -out "NCBI2meta.xml" &>NCBI2meta.log &
+```
+
+### Convert blast xml to tabular
+
+```{r}
+# https://github.com/peterjc/galaxy_blast/blob/master/tools/ncbi_blast_plus/blastxml_to_tabular.py
+# blastxml_to_tabular.py -o meta2NCBI.xml.txt -c std meta2NCBI.xml
+# blastxml_to_tabular.py -o NCBI2meta.xml.txt -c std NCBI2meta.xml
+
+meta2NCBI <- data.table::fread("../temp/meta2NCBI.xml.txt")
+NCBI2meta <- data.table::fread("../temp/NCBI2meta.xml.txt")
+
+# 1	qseqid	Query Seq-id (ID of your sequence)
+# 2	sseqid	Subject Seq-id (ID of the database hit)
+# 3	pident	Percentage of identical matches
+# 4	length	Alignment length
+# 5	mismatch	Number of mismatches
+# 6	gapopen	Number of gap openings
+# 7	qstart	Start of alignment in query
+# 8	qend	End of alignment in query
+# 9	sstart	Start of alignment in subject (database hit)
+# 10	send	End of alignment in subject (database hit)
+# 11	evalue	Expectation value (E-value)
+# 12	bitscore	Bit score
+colnames(meta2NCBI) <-
+  c(
+    "qseqid",
+    "sseqid",
+    "pident",
+    "length",
+    "mismatch",
+    "gapopen",
+    "qstart",
+    "qend",
+    "sstart",
+    "send",
+    "evalue",
+    "bitscore"
+  )
+colnames(NCBI2meta) <-
+  c(
+    "qseqid",
+    "sseqid",
+    "pident",
+    "length",
+    "mismatch",
+    "gapopen",
+    "qstart",
+    "qend",
+    "sstart",
+    "send",
+    "evalue",
+    "bitscore"
+  )
+```
+
+### summary 
+
+```{r }
+# 16647 in meta blastd by 4256 in public
+length(unique(meta2NCBI$qseqid))
+length(unique(meta2NCBI$sseqid))
+# 87.9% in meta blastd by 98.5% in public
+length(unique(meta2NCBI$qseqid)) / nrow(df2)
+length(unique(meta2NCBI$sseqid)) / nrow(df)
+
+# 4254 in public blastd by 16574 in meta
+length(unique(NCBI2meta$qseqid))
+length(unique(NCBI2meta$sseqid))
+# 98.5% in public blastd by 87.5% in meta
+length(unique(NCBI2meta$qseqid)) / nrow(df)
+length(unique(NCBI2meta$sseqid)) / nrow(df2)
+
+```
+
+```{r Percentage of identical matches}
+library(ggplot2)
+library(ggpubr)
+# keep the match with highest score
+meta2NCBI <- meta2NCBI[!duplicated(meta2NCBI$qseqid), ]
+NCBI2meta <- NCBI2meta[!duplicated(NCBI2meta$qseqid), ]
+tempDf <- data.frame(
+  Percentage = c(meta2NCBI$pident, NCBI2meta$pident),
+  group = rep(c("Meta to Public", "Public to Meta"), times =
+                c(nrow(meta2NCBI), nrow(NCBI2meta)))
+)
+ggplot(tempDf, aes(group, Percentage, fill = group)) + geom_violin(show.legend = FALSE) +
+  geom_boxplot(width = .1, show.legend = FALSE) +
+  ylab("Percentage (%)") +
+  theme(
+    text = element_text(size = 30),
+    axis.text = element_text(colour = "black"),
+    axis.title.x = element_blank()
+  ) +
+  stat_compare_means(
+    label = "p.signif",
+    method = "wilcox.test",
+    comparisons = list(c("Meta to Public", "Public to Meta")),
+    size = 5
+  ) +
+  ggsave(
+    paste0("../figure/Percentage of identical matches", ".png"),
+    width = 10.24,
+    height = 7.68,
+    dpi = 100
+  )
+# W = 25026280, p-value < 2.2e-16
+wilcox.test(meta2NCBI$pident, NCBI2meta$pident)
+# meta2NCBI 64.95%, NCBI2meta 75.25%
+median(meta2NCBI$pident)
+median(NCBI2meta$pident)
+```
+
+```{r Alignment length}
+tempDf <- data.frame(
+  length = c(meta2NCBI$length, NCBI2meta$length),
+  group = rep(c("Meta to Public", "Public to Meta"), times =
+                c(nrow(meta2NCBI), nrow(NCBI2meta)))
+)
+ggplot(tempDf, aes(group, length, fill = group)) + geom_violin(show.legend = FALSE) +
+  geom_boxplot(width = .1, show.legend = FALSE) +
+  ylab("Alignment length") +
+  theme(
+    text = element_text(size = 30),
+    axis.text = element_text(colour = "black"),
+    axis.title.x = element_blank()
+  ) +
+  stat_compare_means(
+    label = "p.signif",
+    method = "wilcox.test",
+    comparisons = list(c("Meta to Public", "Public to Meta")),
+    size = 5
+  ) +
+  ggsave(
+    paste0("../figure/Alignment length", ".png"),
+    width = 10.24,
+    height = 7.68,
+    dpi = 100
+  )
+# W = 31437879, p-value < 2.2e-16
+wilcox.test(meta2NCBI$length, NCBI2meta$length)
+# meta2NCBI 316, NCBI2meta 343
+median(meta2NCBI$length)
+median(NCBI2meta$length)
+```
+
+```{r Expectation value (E-value)}
+tempDf <- data.frame(
+  evalue = c(meta2NCBI$evalue, NCBI2meta$evalue),
+  group = rep(c("Meta to Public", "Public to Meta"), times =
+                c(nrow(meta2NCBI), nrow(NCBI2meta)))
+)
+# convert 0 to the smallest positive value
+tempDf$evalue <-
+  -log10(tempDf$evalue + min(tempDf$evalue[tempDf$evalue > 0]))
+ggplot(tempDf, aes(group, evalue, fill = group)) + geom_violin(show.legend = FALSE) +
+  geom_boxplot(width = .1, show.legend = FALSE) +
+  ylab(expression(-log[10]("E-value"))) +
+  theme(
+    text = element_text(size = 30),
+    axis.text = element_text(colour = "black"),
+    axis.title.x = element_blank()
+  ) +
+  stat_compare_means(
+    label = "p.signif",
+    method = "wilcox.test",
+    comparisons = list(c("Meta to Public", "Public to Meta")),
+    size = 5
+  ) +
+  ggsave(
+    paste0("../figure/Expectation value (E-value)", ".png"),
+    width = 10.24,
+    height = 7.68,
+    dpi = 100
+  )
+# W = 45364782, p-value < 2.2e-16
+wilcox.test(meta2NCBI$evalue, NCBI2meta$evalue)
+# meta2NCBI 128.5229, NCBI2meta 180
+median(tempDf$evalue[tempDf$group == "Meta to Public"])
+median(tempDf$evalue[tempDf$group == "Public to Meta"])
+```
+
+```{r bitscore	Bit score}
+tempDf <- data.frame(
+  bitscore = c(meta2NCBI$bitscore, NCBI2meta$bitscore),
+  group = rep(c("Meta to Public", "Public to Meta"), times =
+                c(nrow(meta2NCBI), nrow(NCBI2meta)))
+)
+ggplot(tempDf, aes(group, bitscore, fill = group)) + geom_violin(show.legend = FALSE) +
+  geom_boxplot(width = .1, show.legend = FALSE) +
+  ylab("Bit score") +
+  theme(
+    text = element_text(size = 30),
+    axis.text = element_text(colour = "black"),
+    axis.title.x = element_blank()
+  ) +
+  stat_compare_means(
+    label = "p.signif",
+    method = "wilcox.test",
+    comparisons = list(c("Meta to Public", "Public to Meta")),
+    size = 5
+  ) +
+  ggsave(
+    paste0("../figure/Bit score", ".png"),
+    width = 10.24,
+    height = 7.68,
+    dpi = 100
+  )
+# W = 25140924, p-value < 2.2e-16
+wilcox.test(meta2NCBI$bitscore, NCBI2meta$bitscore)
+# meta2NCBI 369, NCBI2meta 504
+median(meta2NCBI$bitscore)
+median(NCBI2meta$bitscore)
+```

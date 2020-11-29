@@ -1,0 +1,120 @@
+---
+title: "Calculate the protein sequence length of the two databases in detail"
+author: "xyz"
+date: "2020/11/27"
+output: html_document
+---
+
+### Use Awk to read the length of each sequence
+  
+```{bash eval=F}
+# https://www.danielecook.com/generate-fasta-sequence-lengths/
+# cat file.fa | awk '$0 ~ ">" {if (NR > 1) {print c;} c=0;printf substr($0,2,100) "\t"; } $0 !~ ">" {c+=length($0);} END { print c; }'
+awk '/^>/ {if(NR>1){printf("%0.f\n",B)};B=0;next;} {B+=length($0);}' \
+  /media/sf_bigData/database/NCBIfullRmDupMin10Max2700Cluster90.fasta \
+  >ncbiSequenceLength.txt
+  
+awk '/^>/ {if(NR>1){printf("%0.f\n",B)};B=0;next;} {B+=length($0);}' \
+  /media/sf_bigData/database/panamaProteinDatabaseRmDup.fasta \
+  >metaSequenceLength.txt
+```
+
+### rapidly read large file
+
+[Quickly reading very large tables as dataframes](https://stackoverflow.com/questions/1727772/quickly-reading-very-large-tables-as-dataframes)
+
+```{r}
+library(data.table)
+library(ggplot2)
+library(tidyr)
+library(xlsx)
+ncbi <- fread("../data/ncbiSequenceLength.txt")
+meta <- fread("../data/metaSequenceLength.txt")
+```
+
+### statistics in segementions
+  
+[way to get a frequency table](https://stackoverflow.com/questions/7983840/better-way-to-get-a-frequency-table-for-continuous-data-r)  
+  
+  [ggplot2 histgram with curve](https://stackoverflow.com/questions/6967664/ggplot2-histogram-with-normal-curve)
+
+```{r}
+freq <- data.frame(Length = c(ncbi$V1, meta$V1),
+                   Database = rep(c("public", "meta"), times = c(nrow(ncbi), nrow(meta))))
+# Draw the sequence length of two databases on a graph directly
+qplot(
+  Length,
+  data = freq,
+  geom = "freqpoly",
+  ylab = "Count",
+  binwidth = 10,
+  color = Database
+) +
+  theme(text = element_text(size = 15))+
+  ggsave(
+        "../figure/Fitting of length-frequency distribution of 2 DBs.png",
+        width = 10.24,
+        height = 7.68,
+        dpi = 100
+      )
+
+freq$value.cut <-
+  cut(freq$Length,
+      breaks = c(0, 25, 50, 100, 200, 400, 800, 1600, 3200, 12200))
+freq <- with(freq, table(value.cut, Database, useNA = 'ifany'))
+freq <- as.data.frame(freq)
+freq <- spread(freq, Database, -value.cut)
+# delete NA
+# freq<-freq[-8,]
+# colnames(freq)[1]<-"Coverage Range of Proteins %"
+freq2 <-
+  rbind(freq, cbind(value.cut = freq$value.cut, as.data.frame(prop.table(as.matrix(
+    freq[, -1]
+  ), 2))))
+write.xlsx(freq2, "../table/database protein length statistics in segementions.xlsx")
+
+# Draw Bar Charts and fitting curves
+histWithCurve <-
+  function(df,
+           binwidth,
+           colour,
+           fileName,
+           ybreak,
+           highestBin) {
+    colnames(df) <- "Length"
+    n_obs <- nrow(df)
+    ybreaks = round(seq(0, n_obs * binwidth * highestBin, length.out = ybreak), -3)
+    ggplot(df, aes(Length))  +
+      geom_histogram(aes(y = ..density..), binwidth = binwidth, colour = colour) +
+      stat_function(fun = dnorm, args = list(mean = mean(df$Length), sd = sd(df$Length))) +
+      scale_y_continuous("Density",
+                         sec.axis = sec_axis(
+                           trans = ~ . * binwidth * n_obs,
+                           name = "Counts",
+                           breaks = ybreaks
+                         )) +
+      ggsave(
+        paste0(fileName, ".svg"),
+        width = 10.24,
+        height = 7.68,
+        dpi = 100
+      )
+  }
+histWithCurve(
+  ncbi,
+  30,
+  "red",
+  "../figure/Fitting of length-frequency distribution of Public DB",
+  10,
+  0.0025
+)
+histWithCurve(
+  meta[meta$V1 < 2700, ],
+  30,
+  "red",
+  "../figure/Fitting of length-frequency distribution of Meta DB",
+  10,
+  0.003
+)
+```
+

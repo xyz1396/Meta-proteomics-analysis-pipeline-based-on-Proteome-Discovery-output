@@ -1,0 +1,252 @@
+---
+title: "Enrichment analysis For Fig. 8, Table S7"
+author: "xyz"
+date: "2020/11/12"
+output: html_document
+---
+
+### To obtain the abundance differential protein
+
+```{r}
+library(dplyr)
+
+df <-
+  readRDS("../temp/low vs high Public DB differentially expressed proteins.rds")
+df2 <-
+  readRDS("../temp/low vs high Meta DB differentially expressed proteins.rds")
+
+# P-Deficiency vs P-rich more,less, default is all
+extractDP <- function(tempDF, judge = "both") {
+  colnames(tempDF) <- c("FDR", "FC")
+  # The Standard of significance was more than 2 times, P value was 0.05
+  if (judge == "more") {
+    tempDF <- filter(tempDF, FC >= 1, FDR <= 0.05)
+  }
+  if (judge == "less") {
+    tempDF <- filter(tempDF, FC <= -1, FDR <= 0.05)
+  }
+  else{
+    tempDF <- filter(tempDF, FC >= 1 | FC <= -1, FDR <= 0.05)
+  }
+  return(tempDF)
+}
+
+```
+
+
+### Extract annotations from blast2go Annotation Results and perform enrichment analysis
+
+#### Public DB
+
+```{r}
+library(stringr)
+library(clusterProfiler)
+library(GO.db)
+library(ggplot2)
+library(tidyverse)
+library(AnnotationDbi)
+library(xlsx)
+NCBIgo <-
+  read.table(
+    "../data/panamaNCBIgoTerm.txt",
+    sep = "\t",
+    header = T,
+    stringsAsFactors = F
+  )
+# Remove unannotated proteins
+NCBIgo <- NCBIgo[NCBIgo$GO.IDs != "", ]
+# Split a single comment multiple items
+NCBIgo <- separate_rows(NCBIgo, GO.IDs, sep = "; ")
+# Separate MF，BP，CC
+NCBIgo <- cbind(NCBIgo, Ont = str_sub(NCBIgo$GO.IDs, 1L, 1L))
+NCBIgo$GO.IDs <- str_sub(NCBIgo$GO.IDs, 3L)
+goMapBp <- buildGOmap(NCBIgo[NCBIgo$Ont == "P", 2:1])
+goMapMf <- buildGOmap(NCBIgo[NCBIgo$Ont == "F", 2:1])
+goMapCc <- buildGOmap(NCBIgo[NCBIgo$Ont == "C", 2:1])
+saveRDS(goMapBp, "../temp/ncbiGoMapBp.rds")
+saveRDS(goMapMf, "../temp/ncbiGoMapMf.rds")
+saveRDS(goMapCc, "../temp/ncbiGoMapCc.rds")
+goMapBp <- readRDS("../temp/ncbiGoMapBp.rds")
+goMapMf <- readRDS("../temp/ncbiGoMapMf.rds")
+goMapCc <- readRDS("../temp/ncbiGoMapCc.rds")
+# columns(GO.db) You can see which terms you can extract
+goNameBP <-
+  AnnotationDbi::select(
+    x = GO.db,
+    keys = goMapBp$GO,
+    keytype = "GOID",
+    columns = "TERM"
+  )
+goNameMf <-
+  AnnotationDbi::select(
+    x = GO.db,
+    keys = goMapMf$GO,
+    keytype = "GOID",
+    columns = "TERM"
+  )
+goNameCc <-
+  AnnotationDbi::select(
+    x = GO.db,
+    keys = goMapCc$GO,
+    keytype = "GOID",
+    columns = "TERM"
+  )
+df3 <- extractDP(df[, c("padj", "log2FoldChange")], "more")
+df4 <- extractDP(df[, c("padj", "log2FoldChange")], "less")
+# To map up and down biological processes
+goBP <-
+  merge_result(list(
+    up = enricher(row.names(df3), TERM2GENE = goMapBp, TERM2NAME = goNameBP),
+    down = enricher(row.names(df4), TERM2GENE = goMapBp, TERM2NAME =
+                      goNameBP)
+  ))
+dotplot(goBP, font.size = 10) + ggsave("../figure/Public DB biological processes up and down.svg")
+# Draw up-regulated proteins separately
+NCBIgoBp <-
+  enricher(row.names(df3), TERM2GENE = goMapBp, TERM2NAME = goNameBP)
+NCBIgoMf <-
+  enricher(row.names(df3), TERM2GENE = goMapMf, TERM2NAME = goNameMf)
+NCBIgoCc <-
+  enricher(row.names(df3), TERM2GENE = goMapCc, TERM2NAME = goNameCc)
+write.xlsx(as.data.frame(NCBIgoBp), "../table/ncbiGoBp.xlsx")
+write.xlsx(as.data.frame(NCBIgoMf), "../table/ncbiGoMf.xlsx")
+write.xlsx(as.data.frame(NCBIgoCc), "../table/ncbiGoCc.xlsx")
+```
+
+#### Meta DB
+
+```{r}
+metaGo <-
+  read.table(
+    "../data/panamaMetaGoTerm.txt",
+    sep = "\t",
+    header = T,
+    stringsAsFactors = F
+  )
+metaGo <- metaGo[metaGo$GO.IDs != "", ]
+metaGo <- separate_rows(metaGo, GO.IDs, sep = "; ")
+metaGo <- cbind(metaGo, Ont = str_sub(metaGo$GO.IDs, 1L, 1L))
+metaGo$GO.IDs <- str_sub(metaGo$GO.IDs, 3L)
+goMapBp <- buildGOmap(metaGo[metaGo$Ont == "P", 2:1])
+goMapMf <- buildGOmap(metaGo[metaGo$Ont == "F", 2:1])
+goMapCc <- buildGOmap(metaGo[metaGo$Ont == "C", 2:1])
+saveRDS(goMapBp, "../temp/MetaGoMapBp.rds")
+saveRDS(goMapMf, "../temp/MetaGoMapMf.rds")
+saveRDS(goMapCc, "../temp/MetaGoMapCc.rds")
+goMapBp <- readRDS("../temp/MetaGoMapBp.rds")
+goMapMf <- readRDS("../temp/MetaGoMapMf.rds")
+goMapCc <- readRDS("../temp/MetaGoMapCc.rds")
+goNameBP <-
+  AnnotationDbi::select(
+    x = GO.db,
+    keys = goMapBp$GO,
+    keytype = "GOID",
+    columns = "TERM"
+  )
+goNameMf <-
+  AnnotationDbi::select(
+    x = GO.db,
+    keys = goMapMf$GO,
+    keytype = "GOID",
+    columns = "TERM"
+  )
+goNameCc <-
+  AnnotationDbi::select(
+    x = GO.db,
+    keys = goMapCc$GO,
+    keytype = "GOID",
+    columns = "TERM"
+  )
+df5 <- extractDP(df2[, c("padj", "log2FoldChange")], "more")
+df6 <- extractDP(df2[, c("padj", "log2FoldChange")], "less")
+goBP <-
+  merge_result(list(
+    up = enricher(row.names(df5), TERM2GENE = goMapBp, TERM2NAME = goNameBP),
+    down = enricher(row.names(df6), TERM2GENE = goMapBp, TERM2NAME =
+                      goNameBP)
+  ))
+dotplot(goBP, font.size = 10) + ggsave("../figure/Meta DB biological processes up and down.svg")
+# Draw up-regulated proteins separately
+MetaGoBp <-
+  enricher(row.names(df5), TERM2GENE = goMapBp, TERM2NAME = goNameBP)
+MetaGoMf <-
+  enricher(row.names(df5), TERM2GENE = goMapMf, TERM2NAME = goNameMf)
+write.xlsx(as.data.frame(MetaGoBp), "../table/metaGoBp.xlsx")
+write.xlsx(as.data.frame(MetaGoMf), "../table/metaGoMf.xlsx")
+```
+
+### draw GoBp and GoMf results of the 2 DB in one figure
+
+#### GoBp
+
+```{r}
+library(readxl)
+ncbiGoBp <- read_xlsx("../table/ncbiGoBp.xlsx", range = cell_cols(2:9))
+metaGoBp <- read_xlsx("../table/metaGoBp.xlsx", range = cell_cols(2:9))
+# First, merge the two tables
+GoBp <-
+  rbind(cbind(ncbiGoBp, database = "ncbi"),
+        cbind(metaGoBp, database = "meta"))[, c(1:3, 6, 9)]
+GoBpDraw <- separate(GoBp, GeneRatio, c("up", "all"), sep = "/")
+GoBpDraw[, 3:4] <- lapply(GoBpDraw[, 3:4], as.numeric)
+GoBpDraw <- mutate(GoBpDraw, ratio = up / all)
+GoBpDraw$database <-
+  factor(GoBpDraw$database, levels = c("meta", "ncbi"))
+ggplot(GoBpDraw, aes(x = Description, y = ratio, size = up)) +
+  geom_point(aes(colour = p.adjust)) + coord_flip() + facet_grid(cols = vars(database)) +
+  scale_colour_gradient(low = "red", high = "blue") +
+  theme(text = element_text(size = 20)) +
+  scale_x_discrete(
+    labels = function(x)
+      str_wrap(x, width = 20)
+  ) +
+  ggsave(
+    "../figure/ncbiAndMetaGoBp.png",
+    width = 10.24,
+    height = 7.68,
+    dpi = 100
+  )
+
+# First, gather columns that we need to merge
+GoBp <- gather(GoBp, variable, value,-database, -ID, -Description)
+# Hang the variable name on the table name
+GoBp <- unite(GoBp, temp, database, variable)
+# Split the gathered column by the merged variable name
+GoBp <- spread(GoBp, temp, value)
+xlsx::write.xlsx(GoBp, "../table/ncbiAndMetaGoBp.xlsx", row.names = F)
+```
+
+#### GoMf
+
+```{r}
+ncbiGoMf <- read_xlsx("../table/ncbiGoMf.xlsx", range = cell_cols(2:9))
+metaGoMf <- read_xlsx("../table/metaGoMf.xlsx", range = cell_cols(2:9))
+GoMf <-
+  rbind(cbind(ncbiGoMf, database = "ncbi"),
+        cbind(metaGoMf, database = "meta"))[, c(1:3, 6, 9)]
+GoMfDraw <- separate(GoMf, GeneRatio, c("up", "all"), sep = "/")
+GoMfDraw[, 3:4] <- lapply(GoMfDraw[, 3:4], as.numeric)
+GoMfDraw <- mutate(GoMfDraw, ratio = up / all)
+GoMfDraw$database <-
+  factor(GoMfDraw$database, levels = c("meta", "ncbi"))
+
+ggplot(GoMfDraw, aes(x = Description, y = ratio, size = up)) +
+  geom_point(aes(colour = p.adjust)) + coord_flip() + facet_grid(cols = vars(database)) +
+  scale_colour_gradient(low = "red", high = "blue") +
+  theme(text = element_text(size = 20)) +
+  scale_x_discrete(
+    labels = function(x)
+      str_wrap(x, width = 20)
+  ) +
+  ggsave(
+    "../figure/ncbiAndMetaGoMf.png",
+    width = 10.24,
+    height = 7.68,
+    dpi = 100
+  )
+
+GoMf <- gather(GoMf, variable, value,-database, -ID, -Description)
+GoMf <- unite(GoMf, temp, database, variable)
+GoMf <- spread(GoMf, temp, value)
+xlsx::write.xlsx(GoMf, "../table/ncbiAndMetaGoMf.xlsx")
+```

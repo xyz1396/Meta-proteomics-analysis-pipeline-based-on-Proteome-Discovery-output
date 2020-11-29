@@ -1,0 +1,187 @@
+---
+title: "GO annotations of proteins with significantly differential abundance identified by the 2 DBs For Fig. S7"
+author: "xyz"
+date: "2020/11/17"
+output: html_document
+---
+
+```{r}
+#### define function ####
+
+library(tidyverse)
+library(ggrepel)
+library(xlsx)
+judgeSignificance <- function(x, y) {
+  if (is.na(x) | is.na(y))
+    return("no")
+  else if (x <= 0.05) {
+    if (y <= -1)
+      return ("down")
+    else if (y >= 1)
+      return ("up")
+    else
+      return ("no")
+  }
+  else
+    return("no")
+}
+drawGOstat <- function(tempDf, fileName, ylim) {
+  drawDf <- data.frame()
+  for (i in unique(tempDf$go)) {
+    all = sum(tempDf$go == i)
+    up = sum(tempDf$change == "up" & tempDf$go == i)
+    down = sum(tempDf$change == "down" & tempDf$go == i)
+    drawDf <- rbind(drawDf,
+                    data.frame(
+                      go = i,
+                      all = all,
+                      up = up,
+                      down = down,
+                      no = all - up - down
+                    ))
+  }
+  drawDf <-
+    cbind(drawDf,
+          upRatio = drawDf$up / drawDf$all,
+          downRatio = drawDf$down / drawDf$all)
+  write.xlsx2(
+    drawDf,
+    paste0("../table/",fileName, "GOstat.xlsx"),
+    col.names = T,
+    row.names = F
+  )
+  # each annotation is related to more than 20 proteins
+  drawDf <- drawDf[drawDf$all > 20 , ]
+  # Up regulated GOs Top10
+  drawDf2 <-
+    drawDf[order(drawDf$upRatio, decreasing = T), ][1:10, c(-2, -6, -7)]
+  drawDf2$go <- factor(drawDf2$go, levels = drawDf2$go)
+  drawDf2 <- gather(drawDf2, key = Change, value = Count, -go)
+  ggplot(drawDf2) +
+    # ylim(0, ylim)+
+    # geom_bar(stat = "identity",position="dodge",width=0.8, col='black')+
+    # # add number
+    geom_linerange(aes(
+      x = go,
+      ymin = 0,
+      ymax = Count,
+      colour = Change
+    ),
+    position = position_dodge(width = 1)) +
+    geom_point(aes(x = go, y = Count, colour = Change),
+               position = position_dodge(width = 1),
+               size = 4) +
+    # geom_text(aes(x=go, y=Count,label=Count,colour=Change), position=position_dodge(width=1), hjust=0)+
+    geom_text_repel(
+      aes(
+        x = go,
+        y = Count,
+        label = Count,
+        colour = Change
+      ),
+      position = position_dodge(width = 1),
+    ) +
+    coord_flip() +
+    theme(axis.title.y = element_blank(), text = element_text(size = 30)) +
+    # One Line for every three words for Go terms
+    scale_x_discrete(
+      labels = function(x)
+        str_wrap(x, width = 30)
+    ) +
+    ggsave(
+      paste0("../figure/",fileName, "GOstatUpTop10.png"),
+      width = 16,
+      height = 9,
+      dpi = 100
+    )
+  # Down regulated GOs Top10
+  drawDf2 <-
+    drawDf[order(drawDf$downRatio, decreasing = T), ][1:10, c(-2, -6, -7)]
+  drawDf2$go <- factor(drawDf2$go, levels = drawDf2$go)
+  drawDf2 <- gather(drawDf2, key = Change, value = Count, -go)
+  ggplot(drawDf2, aes(x = go, y = Count, fill = Change)) +
+    # ylim(0, ylim)+
+    geom_linerange(aes(
+      x = go,
+      ymin = 0,
+      ymax = Count,
+      colour = Change
+    ),
+    position = position_dodge(width = 1)) +
+    geom_point(aes(x = go, y = Count, colour = Change),
+               position = position_dodge(width = 1),
+               size = 4) +
+    # geom_text(aes(x=go, y=Count,label=Count,colour=Change), position=position_dodge(width=1), hjust=0)+
+    geom_text_repel(
+      aes(
+        x = go,
+        y = Count,
+        label = Count,
+        colour = Change
+      ),
+      position = position_dodge(width = 1),
+    ) +
+    coord_flip() +
+    theme(axis.title.y = element_blank(), text = element_text(size = 30)) +
+    scale_x_discrete(
+      labels = function(x)
+        str_wrap(x, width = 30)
+    ) +
+    ggsave(
+      paste0("../figure/",fileName, "GOstatDownTop10.png"),
+      width = 16,
+      height = 9,
+      dpi = 100
+    )
+}
+
+#### Public DB ####
+
+df<-readRDS("../temp/low vs high Public DB differentially expressed proteins.rds")
+change <- data.frame(
+  id = rownames(df),
+  change = mapply(
+    judgeSignificance,
+    df$padj,
+    df$log2FoldChange
+  )
+)
+goMapBp <- readRDS("../temp/ncbiGoMapBp.rds")
+goNameBp <-
+  AnnotationDbi::select(
+    x = GO.db::GO.db,
+    keys = goMapBp$GO,
+    keytype = "GOID",
+    columns = "TERM"
+  )
+tempDf <-
+  merge(change, data.frame(id = goMapBp$Gene, go = goNameBp$TERM), by = "id")
+tempDf<-na.omit(tempDf)
+drawGOstat(tempDf, "PublicBp")
+
+#### Meta DB ####
+df2 <-
+  readRDS("../temp/low vs high Meta DB differentially expressed proteins.rds")
+change <- data.frame(
+  id = rownames(df2),
+  change = mapply(
+    judgeSignificance,
+    df2$padj,
+    df2$log2FoldChange
+  )
+)
+goMapBp <- readRDS("../temp/metaGoMapBp.rds")
+goNameBp <-
+  AnnotationDbi::select(
+    x = GO.db::GO.db,
+    keys = goMapBp$GO,
+    keytype = "GOID",
+    columns = "TERM"
+  )
+tempDf <-
+  merge(change, data.frame(id = goMapBp$Gene, go = goNameBp$TERM), by = "id")
+tempDf<-na.omit(tempDf)
+# Viewport has zero dimension(s)
+# https://github.com/slowkow/ggrepel/issues/113
+drawGOstat(tempDf, "MetaBp")
+```

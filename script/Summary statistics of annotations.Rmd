@@ -1,0 +1,133 @@
+---
+title: "Summary statistics of annotations For Fig. 7"
+author: "xyz"
+date: "2020/11/14"
+output: html_document
+---
+
+### Public DB
+
+```{r}
+df <- readRDS("../temp/ncbiMasterProtein.rds")
+df <-
+  df[df$`Found.in.Sample.Group:.high` != "Not Found" |
+       df$`Found.in.Sample.Group:.low` != "Not Found" , ]
+df2 <- readRDS("../temp/metaMasterProtein.rds")
+df2 <-
+  df2[df2$`Found.in.Sample.Group:.high` != "Not Found" |
+        df2$`Found.in.Sample.Group:.low` != "Not Found" , ]
+
+ncbi <- read.table(
+  "../data/panamaNCBIblast2gotable.txt",
+  sep = "\t",
+  header = F,
+  stringsAsFactors = F,
+  skip = 1,
+  quote = "\""
+)
+ncbi <- ncbi[ncbi$V3 %in% df$Accession, ]
+# 4,319 proteins were indentified by Public DB, 3,184 got GO annotations, or[BLASTED, MAPPED, ANNOTATED] and [BLASTED, MAPPED]
+# [BLASTED, MAPPED, ANNOTATED]            [BLASTED, MAPPED]                    [BLASTED]
+#                         3029                          155                         1135
+table(ncbi$V2)
+
+ncbi <-
+  read.table(
+    "../data/ncbi.user.out.top",
+    sep = "\t",
+    header = F,
+    stringsAsFactors = F
+  )
+ncbi <- ncbi[stringr::str_sub(ncbi$V1, 6) %in% df$Accession, ]
+# 2438 proteins got KEGG annotations
+sum(ncbi$V2 != "")
+```
+
+### meta
+
+```{r}
+meta <- read.table(
+  "../data/panamaMetablast2gotable.txt",
+  sep = "\t",
+  header = F,
+  stringsAsFactors = F,
+  skip = 1,
+  quote = "\""
+)
+meta <- meta[meta$V3 %in% df2$Accession, ]
+# 18706 proteins were indentified by Meta DB，13023 got GO annotations
+# [BLASTED, MAPPED, ANNOTATED]            [BLASTED, MAPPED]                    [BLASTED]                   [NO-BLAST]
+#                         9527                         3496                         5683                          241
+table(meta$V2)
+
+meta <-
+  read.table(
+    "../data/meta.user.out.top",
+    sep = "\t",
+    header = F,
+    stringsAsFactors = F
+  )
+meta <- meta[stringr::str_sub(meta$V1, 6) %in% df2$Accession, ]
+# 7813 proteins got KEGG annotations
+sum(meta$V2 != "")
+```
+
+### plot
+
+```{r}
+ncbiB2gTag <- read.table(
+  text = "
+Tag,Count
+Blasted,4319
+Go Annotated,3184
+KEGG Annotated,2438",
+header = T,
+sep = ",",
+stringsAsFactors = F
+)
+metaB2gTag <- read.table(
+  text = "
+Tag,Count
+Blasted,18706
+Go Annotated,13023
+KEGG Annotated,7813",
+header = T,
+sep = ",",
+stringsAsFactors = F
+)
+drawDf <-
+  data.frame(
+    Tag = c(ncbiB2gTag$Tag, metaB2gTag$Tag),
+    Count = c(ncbiB2gTag$Count, metaB2gTag$Count),
+    Database = rep(c("Public", "Meta"), each = 3)
+  )
+drawDf$Database <- factor(drawDf$Database, levels = c("Meta", "Public"))
+library(ggplot2)
+ggplot(drawDf, aes(x = Tag, y = Count, fill = Database)) +
+  ylim(0, 25000) +
+  geom_bar(
+    stat = "identity",
+    position = "dodge",
+    width = 0.8,
+    col = 'black'
+  ) +
+  # add numbers
+  geom_text(
+    aes(label = Count),
+    position = position_dodge(width = 0.8),
+    hjust = -0.25,
+    size = 6
+  ) +
+  coord_flip() +
+  theme(
+    axis.title.y = element_blank(),
+    text = element_text(size = 30),
+    axis.text = element_text(colour = "black")
+  ) +
+  ggsave(
+    "../figure/Summary statistics of protein annotations.png",
+    width = 12.80,
+    height = 7.2,
+    dpi = 100
+  )
+```

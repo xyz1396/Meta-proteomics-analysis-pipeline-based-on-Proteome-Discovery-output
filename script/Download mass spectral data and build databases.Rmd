@@ -1,0 +1,184 @@
+---
+title: "Download mass spectral data and build databases"
+author: "xyz"
+date: "2020/5/19"
+output: html_document
+---
+
+### Download mass spectral data and metagenomic sequence
+
+```{bash, eval=F}
+ftp
+open ftp.pride.ebi.ac.uk
+# user
+anonymous
+cd /pride/data/archive/2018/01/PXD005910
+passive
+mls * download.list
+bye
+cat download.list | xargs -n 1 -P 4 bash -c 'wget ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2018/01/PXD005910/$0'  &> downloadlog &
+```
+
+### build the Meta database
+  
+[seqkit tutorial](https://bioinf.shenwei.me/seqkit/usage/)  
+  
+```{bash, eval=F}
+cat *.faa > MetaSoil.fasta
+# remove duplicated sequence
+seqkit rmdup MetaSoil.fasta -s -i -D MetaSoil_duplicated_sequences_statistics -d MetaSoil_duplicated_sequences -o MetaSoil_rmdup.fasta
+# save sequence statistics
+seqkit stats MetaSoil_rmdup.fasta | csvtk csv2md -t >panamaProteinDatabaseRmDup.txt
+```
+
+### build the Public database
+
+```{r download all protein sequences related to soil and rhizosphere from NCBI protein database, eval=F}
+library(rentrez)
+library(parallel)
+
+#### Creating a query ####
+
+soil <- entrez_search(
+  db = "protein",
+  term = paste0(
+    "soil[All Fields] OR rhizosphere[All Fields] AND ",
+    "(fungi[filter] OR protists[filter] OR bacteria[filter] ",
+    "OR archaea[filter] OR viruses[filter])"
+  ),
+  retmax = 0
+)
+fungi <- entrez_search(
+  db = "protein",
+  term = paste0(
+    "soil[All Fields] OR rhizosphere[All Fields] AND ",
+    "fungi[filter]"
+  ),
+  retmax = 0
+)
+protists<-entrez_search(
+  db = "protein",
+  term = paste0(
+    "soil[All Fields] OR rhizosphere[All Fields] AND ",
+    "protists[filter]"
+  ),
+  retmax = 0
+)
+bacteria<-entrez_search(
+  db = "protein",
+  term = paste0(
+    "soil[All Fields] OR rhizosphere[All Fields] AND ",
+    "bacteria[filter]"
+  ),
+  retmax = 0
+)
+viruses<-entrez_search(
+  db = "protein",
+  term = paste0(
+    "soil[All Fields] OR rhizosphere[All Fields] AND ",
+    "viruses[filter]"
+  ),
+  retmax = 0
+)
+archaea<-entrez_search(
+  db = "protein",
+  term = paste0(
+    "soil[All Fields] OR rhizosphere[All Fields] AND ",
+    "archaea[filter]"
+  ),
+  retmax = 0
+)
+#  archaea bacteria    fungi protists  viruses 
+#     0.81    94.37     3.76     0.05     1.01
+round(c(archaea=archaea$count,bacteria=bacteria$count,fungi=fungi$count,
+  protists=protists$count,viruses=viruses$count)/
+  (archaea$count+bacteria$count+fungi$count+protists$count+viruses$count)*100,2)
+
+# Get id
+count <- soil$count
+ids <- c()
+for (id_start in seq(1, count, 10000)) {
+  idGot <- F
+  while (!idGot) {
+    tryCatch({
+      soil <- entrez_search(
+        db = "protein",
+        term = paste0("soil[All Fields] OR rhizosphere[All Fields] AND ",
+                                      "(fungi[filter] OR protists[filter] OR bacteria[filter] ",
+                                      "OR archaea[filter] OR viruses[filter])"),
+        retmax = 10000,
+        retstart = id_start
+      )
+      idGot <- T
+    },
+    error = function(e)
+      cat("network unstable", conditionMessage(e), "\n\n"),
+    finally = {
+      cat(id_start + 9999, "ids downloaded\r")
+    })
+  }
+  ids <- c(ids, soil$ids)
+}
+
+saveRDS(ids, file = "ids.rds")
+ids <- readRDS("ids2.rds")
+
+#### Multithreading download ####
+
+count <- soil$count
+chunk <- count %/% 6
+start <- seq(1, count, chunk)[-7]
+download <- function(x) {
+  soil <- entrez_search(db = "protein",
+                        term = paste0("soil[All Fields] OR rhizosphere[All Fields] AND ",
+                                      "(fungi[filter] OR protists[filter] OR bacteria[filter] ",
+                                      "OR archaea[filter] OR viruses[filter])"),
+                        use_history = TRUE)
+  for (seq_start in seq(x, x + chunk, 1000)) {
+    fastaGot <- F
+    while (!fastaGot) {
+      tryCatch({
+        fasta <- entrez_fetch(
+          db = "protein",
+          web_history = soil$web_history,
+          rettype = "fasta",
+          retmax = 1000,
+          retstart = seq_start
+        )
+        fastaGot <- T
+      },
+      error = function(e)
+        cat("Thread", x, "network unstable", conditionMessage(e), "\n\n"),
+      finally = {
+        cat("Thread", x, seq_start + 999, "sequence downloaded\r")
+      })
+    }
+    cat(fasta,
+        file = paste("NCBIsoil", x, ".fasta", sep = ""),
+        append = TRUE)
+  }
+}
+# initialize 6 threads
+cl <- makeCluster(6, outfile = "", timeout = 6 * 3600) 
+clusterEvalQ(cl, library(rentrez))
+clusterExport(cl, "chunk")
+parLapply(cl, start, download) 
+```
+  
+[cd-hit](https://github.com/weizhongli/cdhit/wiki)  
+
+```{bash build the database, eval=F}
+# remove duplicated sequence
+seqkit rmdup NCBIsoil.fasta -s -i -D NCBIsoil_duplicated_sequences_statistics -d NCBIsoil_duplicated_sequences -o NCBIsoil_rmdup.fasta
+# rename sequences with the same names
+# seqkit rename combine_rmdup.fasta -o combine_rmdup_renamed.fasta
+# filter sequences with length shorter than 10 or longer than 2700
+seqkit seq NCBIsoil_rmdup.fasta -m 10 -M 2700 > NCBIsoil_rmdup_min10_max2700.fasta
+# save sequence statistics
+seqkit stats NCBIsoil_rmdup_min10_max2700.fasta | csvtk csv2md -t >NCBIsoil_rmdup_min10_max2700.txt
+# delete gi number
+seqkit replace NCBIsoil_rmdup_min10_max2700.fasta -p "gi.[0-9]+." > NCBIsoil_rmdup_min10_max2700_nogi.fasta
+# Decrease redundancy
+cd-hit -i NCBIsoil_rmdup_min10_max2700_nogi.fasta -o NCBIfullRmDupMin10Max2700Cluster90.fasta -c 0.9 -M 8000 -T 4
+```
+

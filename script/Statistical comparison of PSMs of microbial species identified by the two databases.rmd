@@ -1,0 +1,146 @@
+---
+title: Statistical comparison of PSMs of microbial species identified by the two databases For Fig. S6
+author: "xyz"
+date: "2020/11/12"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+
+df<-read.table("../data/ncbi.user.out.top",sep = "\t",header = F,stringsAsFactors = F)
+df2<-read.table("../data/meta.user.out.top",sep = "\t",header = F,stringsAsFactors = F)
+df3<-readRDS("../temp/ncbiMasterProtein.rds")
+df4<-readRDS("../temp/metaMasterProtein.rds")
+
+
+ncbi<-data.frame(id=df3$Accession,Genus=df[,5],PSMs=df3$`#.PSMs`)
+ncbi[is.na(ncbi)]<-0
+ncbiGenus<-group_by(ncbi[,c(2,3)],Genus) %>% summarise_all(sum)
+# Sort from large total abundance to small total abundance
+ncbiGenus<-ncbiGenus[sort(ncbiGenus$PSMs,index.return=T,decreasing = T)$ix,]
+# The abundance after top 10 are treated as others
+ncbiGenus<-rbind(ncbiGenus[1:10,],data.frame(Genus="Others",PSMs=sum(ncbiGenus[11:nrow(ncbiGenus),2])),stringsAsFactors=F)
+ncbiGenus[,1]<-apply(ncbiGenus[,1],1,as.character)
+
+meta<-data.frame(id=df4$Accession,Genus=df2[,5],PSMs=df4$`#.PSMs`)
+meta[is.na(meta)]<-0
+metaGenus<-group_by(meta[,c(2,3)],Genus) %>% summarise_all(sum)
+metaGenus<-metaGenus[sort(metaGenus$PSMs,index.return=T,decreasing = T)$ix,]
+metaGenus<-rbind(metaGenus[1:10,],data.frame(Genus="Others",PSMs=sum(metaGenus[11:nrow(metaGenus),2])),stringsAsFactors=F)
+metaGenus[,1]<-apply(metaGenus[,1],1,as.character)
+
+# Merge two tables
+allGenus<-cbind(rbind(ncbiGenus,metaGenus),Database=rep(c("Public","Meta"),each=11))
+allGenus$Database<-factor(allGenus$Database,levels = c("Meta","Public"))
+# sort from lowest abundance to highest abundance
+allGenus$Genus<-factor(allGenus$Genus,
+                       levels = (group_by(allGenus[,c(1,2)],Genus) %>% summarise_all(sum) %>% arrange(PSMs))$Genus)
+
+# Stacked bar chart of abundance
+ggplot(allGenus) + 
+  geom_bar(aes(x=Database, y=PSMs, fill=Genus),stat = "identity", width=0.5, col='black')+
+  theme(axis.title.x=element_blank(),text = element_text(size = 30),axis.text=element_text(colour="black"))+
+  ggsave("../figure/PSMs of Microbial species detected in two databases at the genus level.png",
+         width = 10.24, height = 7.68,dpi=100)
+
+# Stacked bar chart of abundance portion
+allGenus<-group_by(allGenus,Database) %>% mutate(Portion=round(prop.table(PSMs)*100,2))
+ggplot(allGenus) + 
+  geom_bar(aes(x=Database, y=Portion, fill=Genus),stat = "identity", width=0.5, col='black')+
+  theme(axis.title.x=element_blank(),text = element_text(size = 30),axis.text=element_text(colour="black"))+
+  ylab("PSMs Portion (%)")+
+  ggsave("../figure/PSMs portion of HP-LP Microbial species detected in two databases at the genus level.png",
+         width = 10.24, height = 7.68,dpi=100)
+```
+
+### the PSMs of genera indentified only by one DB and both
+
+```{r}
+library(ggpubr)
+ncbi<-cbind(id=df3$Accession,df3[,c(80:81,13)],Genus=df[,5])
+ncbi[,2:3]<-ncbi[,2:3]!="Not Found"
+ncbi<-ncbi[rowSums(ncbi[,2:3])>0,]
+ncbiGenus<-group_by(ncbi[,c(4,5)],Genus) %>% summarise_all(sum)
+meta<-cbind(id=df4$Accession,df4[,c(173:174,14)],Genus=df2[,5])
+meta[,2:3]<-meta[,2:3]!="Not Found"
+meta<-meta[rowSums(meta[,2:3])>0,]
+metaGenus<-group_by(meta[,c(4,5)],Genus) %>% summarise_all(sum)
+
+# PSMs of genera identified only by Public DB and both DB
+ncbiGenus<-cbind(ncbiGenus,Found="Both DBs",stringsAsFactors=F)
+ncbiGenus[ncbiGenus$Genus %in% setdiff(ncbiGenus$Genus,metaGenus$Genus),"Found"]<-"Public DB"
+# median of PSMs of  genera identified only by Public DB is 8
+median(ncbiGenus[ncbiGenus$Found=="Public DB","#.PSMs"])
+# median of PSMs of  genera identified only by Both DB is 34
+median(ncbiGenus[ncbiGenus$Found=="Both DBs","#.PSMs"])
+# W = 8588.5, p-value = 4.529e-11
+wilcox.test(ncbiGenus[ncbiGenus$Found=="Public DB","#.PSMs"],ncbiGenus[ncbiGenus$Found=="Both DBs","#.PSMs"])
+ggplot(ncbiGenus, aes(Found, `#.PSMs`, fill = Found)) + geom_violin(show.legend = FALSE) +
+  geom_boxplot(width = .1, show.legend = FALSE) +
+  ylab("PSMs") +
+  theme(
+    text = element_text(size = 30),
+    axis.text = element_text(colour = "black"),
+    axis.title.x = element_blank()
+  ) +
+  stat_compare_means(
+    label = "p.signif",
+    method = "wilcox.test",
+    comparisons = list(c("Public DB", "Both DBs")),
+    size = 5
+  ) +
+  scale_y_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+    # limit y range    
+    ,limits = c(10^0,10^6)
+  ) +
+  annotation_logticks(sides="l") +
+  ggsave(
+    paste0("../figure/PSMs of genera identified only by Public DB and both DB", ".png"),
+    width = 10.24,
+    height = 7.68,
+    dpi = 100
+  )
+
+# PSMs of genera identified only by Meta DB and both DB
+metaGenus<-cbind(metaGenus,Found="Both DBs",stringsAsFactors=F)
+metaGenus[metaGenus$Genus %in% setdiff(metaGenus$Genus,ncbiGenus$Genus),"Found"]<-"Meta DB"
+# median of PSMs of  genera identified only by Meta DB is 12
+median(metaGenus[metaGenus$Found=="Meta DB","#.PSMs"])
+# median of PSMs of  genera identified only by Both DB is 219.5
+median(metaGenus[metaGenus$Found=="Both DBs","#.PSMs"])
+# W = 41782, p-value < 2.2e-16
+wilcox.test(metaGenus[metaGenus$Found=="Meta DB","#.PSMs"],metaGenus[metaGenus$Found=="Both DBs","#.PSMs"])
+ggplot(metaGenus, aes(Found, `#.PSMs`, fill = Found)) + geom_violin(show.legend = FALSE) +
+  geom_boxplot(width = .1, show.legend = FALSE) +
+  ylab("PSMs") +
+  theme(
+    text = element_text(size = 30),
+    axis.text = element_text(colour = "black"),
+    axis.title.x = element_blank()
+  ) +
+  stat_compare_means(
+    label = "p.signif",
+    method = "wilcox.test",
+    comparisons = list(c("Meta DB", "Both DBs")),
+    size = 5
+  ) +
+  scale_y_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+    # limit y range
+    ,limits = c(10^0,10^6)
+  ) +
+  annotation_logticks(sides="l") +
+  ggsave(
+    paste0("../figure/PSMs of genera identified only by Meta DB and both DB", ".png"),
+    width = 10.24,
+    height = 7.68,
+    dpi = 100
+  )
+```
+

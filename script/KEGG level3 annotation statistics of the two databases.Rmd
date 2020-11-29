@@ -1,0 +1,597 @@
+---
+title: "KEGG level3 annotation statistics of the two databases"
+author: "xyz"
+date: "2020/11/30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### get level3 annotation
+
+```{r}
+library(rjson)
+library(stringr)
+library(foreach)
+library(parallel)
+library(doParallel)
+brite <- fromJSON(file = "../data/ko00001.json")
+ncbi <-
+  read.table(
+    "../data/ncbi.user.out.top",
+    sep = "\t",
+    header = F,
+    stringsAsFactors = F
+  )
+meta <-
+  read.table(
+    "../data/meta.user.out.top",
+    sep = "\t",
+    header = F,
+    stringsAsFactors = F
+  )
+ko <- unique(c(ncbi$V2, meta$V2))
+ko <- ko[ko != ""]
+# "K01198,K01209" "K00504,K18200" "K02769,K02770"
+# "K01198,K01209" level 3 Amino sugar and nucleotide sugar metabolism [PATH:ko00520]
+# "K00504,K18200" level 3 Enzymes with EC numbers
+# "K02769,K02770" level 3 Fructose and mannose metabolism [PATH:ko00051]
+# Phosphotransferase system (PTS) [PATH:ko02060]
+# 02000 Transporters [BR:ko02000]
+ko[str_length(ko) != 6]
+ko[ko == "K01198,K01209"] <- "K01198"
+ko[ko == "K00504,K18200"] <- "K00504"
+ko[ko == "K02769,K02770"] <- "K02769"
+ncbi$V2[ncbi$V2 == "K01198,K01209"] <- "K01198"
+meta$V2[meta$V2 == "K00504,K18200"] <- "K00504"
+meta$V2[meta$V2 == "K02769,K02770"] <- "K02769"
+# K00256 cannot find annotation
+ko <- ko[ko != "K00256"]
+traverse <- function(leafId,
+                     nodes = brite,
+                     path = c()) {
+  results <- data.frame()
+  traverse2 <- function(leafId, nodes, path = c()) {
+    if (length(path) == 0) {
+      path <- c(path, nodes$name)
+    }
+    for (i in nodes$children) {
+      tmpPath <- c(path, i$name)
+      if (leafId == str_sub(i$name, 1, 6)) {
+        results <<- rbind(results, tmpPath)
+      }
+      if (!is.null(i$children)) {
+        traverse2(leafId, i, tmpPath)
+      }
+    }
+  }
+  traverse2(leafId, nodes = nodes)
+  colnames(results) <-
+    c("level0", "level1", "level2", "level3", "level4")
+  return(results)
+}
+# multithreads
+cl <- makePSOCKcluster(4)
+registerDoParallel(cl)
+results <-
+  foreach(leafId = ko,
+          .packages = 'stringr',
+          .combine = 'rbind') %dopar% traverse(leafId)
+stopCluster(cl)
+saveRDS(results, "../temp/KEGG 4 level results.rds")
+results <- readRDS("../temp/KEGG 4 level results.rds")
+level3 <- results[, c("level3", "level4")]
+# some ids have same annotation, 03010 03011,02020 02022, 03041 03040
+level3$level3 <- str_remove(level3$level3, "\\[.*\\]")
+level3$level3 <- paste0("ko", level3$level3)
+level3$level4 <- str_sub(level3$level4, 1, 6)
+saveRDS(level3, file = "../temp/KEGGlevel3.rds")
+level3 <- readRDS("../temp/KEGGlevel3.rds")
+```
+
+
+### get abundance
+
+```{r}
+library(dplyr)
+library(xlsx)
+ncbilevel3 <- left_join(ncbi[, 1:2], level3, by = c("V2" = "level4"))
+metalevel3 <- left_join(meta[, 1:2], level3, by = c("V2" = "level4"))
+ncbilevel3$V1 <- str_sub(ncbilevel3$V1, 6)
+metalevel3$V1 <- str_sub(metalevel3$V1, 6)
+ncbilevel3 <- ncbilevel3[!is.na(ncbilevel3$level3), ]
+metalevel3 <- metalevel3[!is.na(metalevel3$level3), ]
+
+df3 <- readRDS("../temp/ncbiMasterProtein.rds")
+df4 <- readRDS("../temp/metaMasterProtein.rds")
+ncbilevel3 <-
+  left_join(ncbilevel3, cbind(id = df3$Accession, df3[, c(80, 81, 26, 27)]), by =
+              c("V1" = "id"))
+metalevel3 <-
+  left_join(metalevel3, cbind(id = df4$Accession, df4[, c(173, 174, 33, 34)]), by =
+              c("V1" = "id"))
+colnames(ncbilevel3)[1:3] <- c("id", "ORTHOLOGY", "Level3-pathway")
+colnames(metalevel3)[1:3] <- c("id", "ORTHOLOGY", "Level3-pathway")
+write.xlsx2(
+  ncbilevel3,
+  "../table/KEGG level3 annotation and abundance.xlsx",
+  "Public database",
+  row.names = F
+)
+write.xlsx2(
+  metalevel3,
+  "../table/KEGG level3 annotation and abundance.xlsx",
+  "Meta database",
+  row.names = F,
+  append = T
+)
+
+ncbilevel3[, 4:5] <- ncbilevel3[, 4:5] != "Not Found"
+metalevel3[, 4:5] <- metalevel3[, 4:5] != "Not Found"
+ncbilevel3 <-
+  ncbilevel3[(
+    ncbilevel3$`Found.in.Sample.Group:.high` + ncbilevel3$`Found.in.Sample.Group:.low`
+  ) > 0, ]
+metalevel3 <-
+  metalevel3[(
+    metalevel3$`Found.in.Sample.Group:.high` + metalevel3$`Found.in.Sample.Group:.low`
+  ) > 0, ]
+# 251 and 296 KEGG level3 annotations were identified by Public DB and Meta DB respectively in total
+length(unique(ncbilevel3$`Level3-pathway`))
+length(unique(metalevel3$`Level3-pathway`))
+```
+
+
+### Venn plot
+
+```{r}
+library(VennDiagram)
+library(futile.logger)
+
+flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+venn.diagram(
+  list(
+    Public = ncbilevel3$`Level3-pathway`,
+    Meta = metalevel3$`Level3-pathway`
+  ),
+  col = "white",
+  fill = c("#d37a20", "#dbcb09"),
+  lwd = .5,
+  filename = "../figure/KEGG level3 annotations detected in two databases.png",
+  cex = .5,
+  cat.cex = .5,
+  width = 1400,
+  height = 1200
+)
+venn.diagram(
+  list(
+    HP = ncbilevel3$`Level3-pathway`[ncbilevel3$`Found.in.Sample.Group:.high`],
+    LP = ncbilevel3$`Level3-pathway`[ncbilevel3$`Found.in.Sample.Group:.low`],
+    HM = metalevel3$`Level3-pathway`[metalevel3$`Found.in.Sample.Group:.high`],
+    LM = metalevel3$`Level3-pathway`[metalevel3$`Found.in.Sample.Group:.low`]
+  ),
+  col = "white",
+  fill = c("#d37a20", "#dbcb09", "#3a9cbc", "#dd7208"),
+  lwd = .5,
+  filename = "../figure/HP-LP KEGG level3 annotations detected in two databases.png",
+  cex = .5,
+  cat.cex = .5,
+  width = 1200,
+  height = 1200
+)
+```
+
+### Stacked bar chart
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+ncbi2 <- ncbilevel3[, c(3, 6, 7)]
+# delete unrelated pathway
+ncbi2 <- ncbi2[ncbi2$Level3 != "ko99980 Enzymes with EC numbers", ]
+ncbi2 <- ncbi2[ncbi2$Level3 != "ko05016 Huntington disease ", ]
+ncbi2 <-
+  ncbi2[ncbi2$Level3 != "ko04213 Longevity regulating pathway - multiple species ", ]
+ncbi2 <-
+  ncbi2[ncbi2$Level3 != "ko04212 Longevity regulating pathway - worm ", ]
+ncbi2 <-
+  ncbi2[ncbi2$Level3 != "ko04211 Longevity regulating pathway ", ]
+ncbi2 <-
+  ncbi2[ncbi2$Level3 != "ko04013 MAPK signaling pathway - fly ", ]
+ncbi2 <- ncbi2[ncbi2$Level3 != "ko05152 Tuberculosis ", ]
+ncbi2[is.na(ncbi2)] <- 0
+ncbi2 <- group_by(ncbi2, `Level3-pathway`) %>% summarise_all(sum)
+colnames(ncbi2) <- c("Level3", "High", "Low")
+# Sort from large total abundance to small total abundance
+ncbi2 <-
+  ncbi2[sort(rowSums(ncbi2[, 2:3]),
+             index.return = T,
+             decreasing = T)$ix, ]
+# The abundance after top 10 are treated as others
+ncbi2 <-
+  rbind(ncbi2[1:10, ],
+        data.frame(
+          Level3 = "Others",
+          High = sum(ncbi2[11:nrow(ncbi2), 2]),
+          Low = sum(ncbi2[11:nrow(ncbi2), 3])
+        ),
+        stringsAsFactors = F)
+
+meta2 <- metalevel3[, c(3, 6, 7)]
+meta2 <- meta2[meta2$Level3 != "ko99980 Enzymes with EC numbers", ]
+meta2 <- meta2[meta2$Level3 != "ko05016 Huntington disease ", ]
+meta2 <-
+  meta2[meta2$Level3 != "ko04213 Longevity regulating pathway - multiple species ", ]
+meta2 <-
+  meta2[meta2$Level3 != "ko04212 Longevity regulating pathway - worm ", ]
+meta2 <-
+  meta2[meta2$Level3 != "ko04211 Longevity regulating pathway ", ]
+meta2 <-
+  meta2[meta2$Level3 != "ko04013 MAPK signaling pathway - fly ", ]
+meta2 <- meta2[meta2$Level3 != "ko05152 Tuberculosis ", ]
+meta2[is.na(meta2)] <- 0
+meta2 <- group_by(meta2, `Level3-pathway`) %>% summarise_all(sum)
+colnames(meta2) <- c("Level3", "High", "Low")
+# Sort from large total abundance to small total abundance
+meta2 <-
+  meta2[sort(rowSums(meta2[, 2:3]),
+             index.return = T,
+             decreasing = T)$ix, ]
+# The abundance after top 10 are treated as others
+meta2 <-
+  rbind(meta2[1:10, ],
+        data.frame(
+          Level3 = "Others",
+          High = sum(meta2[11:nrow(meta2), 2]),
+          Low = sum(meta2[11:nrow(meta2), 3])
+        ),
+        stringsAsFactors = F)
+
+# Merge two tables
+all2 <-
+  cbind(rbind(ncbi2, meta2), Database = rep(c("Public", "Meta"), each = 11))
+all2 <- gather(all2, Phosphorus, Abundance, -Database, -Level3)
+all2$Database <- factor(all2$Database, levels = c("Meta", "Public"))
+# delete KO number
+all2$Level3 <- str_replace(all2$Level3, "ko([0-9]+).", "")
+all2$Level3 <- str_wrap(all2$Level3, 20)
+# sort from lowest abundance to highest abundance
+all2$Level3 <- factor(all2$Level3,
+                      levels = (
+                        group_by(all2[, c(1, 4)], Level3) %>% summarise_all(sum) %>% arrange(Abundance)
+                      )$Level3)
+all2$Phosphorus[all2$Phosphorus == "High"] <- "P-rich"
+all2$Phosphorus[all2$Phosphorus == "Low"] <- "P-deficient"
+all2$Phosphorus <-
+  factor(all2$Phosphorus, levels = c("P-rich", "P-deficient"))
+# Stacked bar chart of abundance
+ggplot(all2) +
+  geom_bar(
+    aes(x = Database, y = Abundance, fill = Level3),
+    stat = "identity",
+    width = 0.5,
+    col = 'black'
+  ) +
+  facet_grid(cols = vars(Phosphorus)) +
+  theme(
+    axis.title.x = element_blank(),
+    text = element_text(size = 30),
+    axis.text = element_text(colour = "black"),
+    legend.key.size = unit(2, 'cm'),
+    legend.text = element_text(size = 15)
+  ) +
+  guides(fill = guide_legend(title = "KEGG level 3")) +
+  ggsave(
+    "../figure/Abundance of HP-LP Microbial species detected in two databases at the KEGG Level3.png",
+    width = 12,
+    height = 12,
+    dpi = 100
+  )
+
+# Stacked bar chart of abundance portion
+all2 <-
+  group_by(all2, Database, Phosphorus) %>% mutate(Portion = round(prop.table(Abundance) *
+                                                                    100, 2))
+write.xlsx2(as.data.frame(all2),
+                  "../table/Level3 abundance and portion.xlsx",
+                  row.names = F)
+ggplot(all2) +
+  geom_bar(
+    aes(x = Database, y = Portion, fill = Level3),
+    stat = "identity",
+    width = 0.5,
+    col = 'black'
+  ) +
+  facet_grid(cols = vars(Phosphorus)) +
+  theme(
+    axis.title.x = element_blank(),
+    text = element_text(size = 30),
+    axis.text = element_text(colour = "black"),
+    legend.key.size = unit(2, 'cm'),
+    legend.text = element_text(size = 15)
+  ) +
+  ylab("Abundance (%)") +
+  guides(fill = guide_legend(title = "KEGG level 3")) +
+  ggsave(
+    "../figure/Abundance portion of HP-LP Microbial species detected in two databases at the KEGG Level3.png",
+    width = 12,
+    height = 12,
+    dpi = 100
+  )
+```
+
+```{r "Correlation of genera's abundance"}
+library(ggExtra)
+ncbi2 <- ncbilevel3[, c(3, 6, 7)]
+ncbi2[is.na(ncbi2)] <- 0
+ncbi2 <- ncbi2[rowSums(ncbi2[, -1]) > 0, ]
+ncbi2 <- group_by(ncbi2, `Level3-pathway`) %>% summarise_all(sum)
+colnames(ncbi2) <- c("Level3", "High", "Low")
+meta2 <- metalevel3[, c(3, 6, 7)]
+meta2[is.na(meta2)] <- 0
+meta2 <- meta2[rowSums(meta2[, -1]) > 0, ]
+meta2 <- group_by(meta2, `Level3-pathway`) %>% summarise_all(sum)
+colnames(meta2) <- c("Level3", "High", "Low")
+all2 <- merge(meta2, ncbi2, by = "Level3", all = F)
+all2[,-1] <- prop.table(as.matrix(all2[,-1]), 2)
+ixh <- (all2$High.x + all2$High.y) > 0
+# t = 94.723, df = 199, p-value < 2.2e-16, 0.9890917
+cor.test(all2$High.x[ixh], all2$High.y[ixh])
+ixl <- (all2$Low.x + all2$Low.y) > 0
+# t = 80.698, df = 201, p-value < 2.2e-16, cor 0.9852093
+cor.test(all2$Low.x[ixl], all2$Low.y[ixl])
+minabundance <- all2[, -1]
+minabundance <- min(minabundance[minabundance > 0])
+# median HP Meta 0.0904402 %,median HP Public 0.09414073 %
+median(all2$High.x[ixh]) * 100
+median(all2$High.y[ixh]) * 100
+p <-
+  ggplot(
+    data.frame(
+      x = all2$High.x[ixh] + minabundance,
+      y = all2$High.y[ixh] + minabundance
+    ) * 100,
+    aes(x = x, y = y)
+  ) +
+  geom_point(size = 3) +
+  geom_smooth(method = lm,
+              formula = y ~ x,
+              se = T) +
+  scale_x_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  scale_y_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  annotation_logticks() +
+  ylab("P-rich Public KEGG Level 3 (%)") +
+  xlab("P-rich Meta KEGG Level 3 (%)") +
+  theme(text = element_text(size = 30),
+        axis.text = element_text(colour = "black"))
+p + ggsave(
+  "../figure/Correlation of KEGG Level3 bundance identified by the two databases in HP.png",
+  width = 12,
+  height = 9,
+  dpi = 100
+)
+png(
+  file = "../figure/Correlation of KEGG level3 identified by the two databases in HP with histogram.png",
+  width = 1200,
+  height = 900,
+  units = "px"
+)
+ggMarginal(p, type = "histogram")
+dev.off()
+
+# median LP Meta 0.1300034 %, median LP Public 0.05201934 %
+median(all2$Low.x[ixl]) * 100
+median(all2$Low.y[ixl]) * 100
+p <-
+  ggplot(
+    data.frame(
+      x = all2$Low.x[ixl] + minabundance,
+      y = all2$Low.y[ixl] + minabundance
+    ) * 100,
+    aes(x = x, y = y)
+  ) +
+  geom_point(size = 3) +
+  geom_smooth(method = lm,
+              formula = y ~ x,
+              se = T) +
+  scale_x_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  scale_y_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  annotation_logticks() +
+  ylab("P-deficient Public KEGG Level 3 (%)") +
+  xlab("P-deficient Meta KEGG Level 3 (%)") +
+  theme(text = element_text(size = 30),
+        axis.text = element_text(colour = "black"))
+p + ggsave(
+  "../figure/Correlation of KEGG level3 identified by the two databases in LP.png",
+  width = 12,
+  height = 9,
+  dpi = 100
+)
+png(
+  file = "../figure/Correlation of KEGG level3 identified by the two databases in LP with histogram.png",
+  width = 1200,
+  height = 900,
+  units = "px"
+)
+ggMarginal(p, type = "histogram")
+dev.off()
+```
+
+### level2
+
+### get abundance
+
+```{r}
+level2 <- results[, c("level2", "level4")]
+level2$level4 <- str_sub(level2$level4, 1, 6)
+ncbilevel2 <- left_join(ncbi[, 1:2], level2, by = c("V2" = "level4"))
+metalevel2 <- left_join(meta[, 1:2], level2, by = c("V2" = "level4"))
+ncbilevel2$V1 <- str_sub(ncbilevel2$V1, 6)
+metalevel2$V1 <- str_sub(metalevel2$V1, 6)
+ncbilevel2 <- ncbilevel2[!is.na(ncbilevel2$level2), ]
+metalevel2 <- metalevel2[!is.na(metalevel2$level2), ]
+ncbilevel2 <-
+  left_join(ncbilevel2, cbind(id = df3$Accession, df3[, c(80, 81, 26, 27)]), by =
+              c("V1" = "id"))
+metalevel2 <-
+  left_join(metalevel2, cbind(id = df4$Accession, df4[, c(173, 174, 33, 34)]), by =
+              c("V1" = "id"))
+colnames(ncbilevel2)[1:3] <- c("id", "ORTHOLOGY", "level2-pathway")
+colnames(metalevel2)[1:3] <- c("id", "ORTHOLOGY", "level2-pathway")
+write.xlsx2(ncbilevel2,
+                  "../table/KEGG level2 annotation and abundance.xlsx",
+                  "Public database",
+                  row.names = F)
+write.xlsx2(
+  metalevel2,
+  "../table/KEGG level2 annotation and abundance.xlsx",
+  "Meta database",
+  row.names = F,
+  append = T
+)
+
+ncbilevel2[, 4:5] <- ncbilevel2[, 4:5] != "Not Found"
+metalevel2[, 4:5] <- metalevel2[, 4:5] != "Not Found"
+ncbilevel2 <-
+  ncbilevel2[(
+    ncbilevel2$`Found.in.Sample.Group:.high` + ncbilevel2$`Found.in.Sample.Group:.low`
+  ) > 0, ]
+metalevel2 <-
+  metalevel2[(
+    metalevel2$`Found.in.Sample.Group:.high` + metalevel2$`Found.in.Sample.Group:.low`
+  ) > 0, ]
+# 48 and 49 KEGG level2 annotations were identified by Public DB and Meta DB respectively in total
+length(unique(ncbilevel2$`level2-pathway`))
+length(unique(metalevel2$`level2-pathway`))
+```
+
+
+```{r "Correlation of genera's abundance"}
+ncbi2 <- ncbilevel2[, c(3, 6, 7)]
+ncbi2[is.na(ncbi2)] <- 0
+ncbi2 <- ncbi2[rowSums(ncbi2[, -1]) > 0, ]
+ncbi2 <- group_by(ncbi2, `level2-pathway`) %>% summarise_all(sum)
+colnames(ncbi2) <- c("level2", "High", "Low")
+meta2 <- metalevel2[, c(3, 6, 7)]
+meta2[is.na(meta2)] <- 0
+meta2 <- meta2[rowSums(meta2[, -1]) > 0, ]
+meta2 <- group_by(meta2, `level2-pathway`) %>% summarise_all(sum)
+colnames(meta2) <- c("level2", "High", "Low")
+all2 <- merge(meta2, ncbi2, by = "level2", all = F)
+all2[,-1] <- prop.table(as.matrix(all2[,-1]), 2)
+ixh <- (all2$High.x + all2$High.y) > 0
+# t = 42.488, df = 45, p-value < 2.2e-16, cor 0.9877644
+cor.test(all2$High.x[ixh], all2$High.y[ixh])
+ixl <- (all2$Low.x + all2$Low.y) > 0
+# t = 32.848, df = 44, p-value < 2.2e-16, cor 0.9802138
+cor.test(all2$Low.x[ixl], all2$Low.y[ixl])
+minabundance <- all2[, -1]
+minabundance <- min(minabundance[minabundance > 0])
+# median HP Meta 0.3821486 %,median HP Public 0.5098147 %
+median(all2$High.x[ixh]) * 100
+median(all2$High.y[ixh]) * 100
+p <-
+  ggplot(
+    data.frame(
+      x = all2$High.x[ixh] + minabundance,
+      y = all2$High.y[ixh] + minabundance
+    ) * 100,
+    aes(x = x, y = y)
+  ) +
+  geom_point(size = 3) +
+  geom_smooth(method = lm,
+              formula = y ~ x,
+              se = T) +
+  scale_x_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  scale_y_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  annotation_logticks() +
+  ylab("P-rich Public KEGG Level 2 (%)") +
+  xlab("P-rich Meta KEGG Level 2 (%)") +
+  theme(text = element_text(size = 30),
+        axis.text = element_text(colour = "black"))
+p + ggsave(
+  "../figure/Correlation of KEGG level 2 bundance identified by the two databases in HP.png",
+  width = 12,
+  height = 9,
+  dpi = 100
+)
+png(
+  file = "../figure/Correlation of KEGG level 2 identified by the two databases in HP with histogram.png",
+  width = 1200,
+  height = 900,
+  units = "px"
+)
+ggMarginal(p, type = "histogram")
+dev.off()
+
+# median LP Meta 0.1300034 %, median LP Public 0.05201934 %
+median(all2$Low.x[ixl]) * 100
+median(all2$Low.y[ixl]) * 100
+p <-
+  ggplot(
+    data.frame(
+      x = all2$Low.x[ixl] + minabundance,
+      y = all2$Low.y[ixl] + minabundance
+    ) * 100,
+    aes(x = x, y = y)
+  ) +
+  geom_point(size = 3) +
+  geom_smooth(method = lm,
+              formula = y ~ x,
+              se = T) +
+  scale_x_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  scale_y_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  annotation_logticks() +
+  ylab("P-deficient Public KEGG Level 2 (%)") +
+  xlab("P-deficient Meta KEGG Level 2 (%)") +
+  theme(text = element_text(size = 30),
+        axis.text = element_text(colour = "black"))
+p + ggsave(
+  "../figure/Correlation of KEGG level 2 identified by the two databases in LP.png",
+  width = 12,
+  height = 9,
+  dpi = 100
+)
+png(
+  file = "../figure/Correlation of KEGG level 2 identified by the two databases in LP with histogram.png",
+  width = 1200,
+  height = 900,
+  units = "px"
+)
+ggMarginal(p, type = "histogram")
+dev.off()
+```

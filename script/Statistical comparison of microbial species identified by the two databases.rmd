@@ -1,0 +1,451 @@
+---
+title: "Statistical comparison of microbial species identified by the two databases For Fig. 5, 6, Table. S4"
+author: "xyz"
+date: "2020/10/26"
+output: html_document
+---
+
+### Get the species annotation by sequence ID
+
+```{r Public DB}
+
+#### Match the Accession ID of the sequence identified by public db to the UID of the species ####
+
+library(taxize)
+library(dplyr)
+
+options(ENTREZ_KEY = "Your NCBI ENTREZ_KEY from your NCBI user homepage")
+df3 <- readRDS("../temp/ncbiMasterProtein.rds")
+genbankID <- df3$Accession
+# One batche for every 50 IDs
+batches <- split(genbankID, ceiling(seq_along(genbankID) / 50))
+ids <- data.frame()
+j <- 0
+for (i in batches) {
+  idGot <- F
+  while (!idGot) {
+    tryCatch({
+      uid <- genbank2uid(id = i)
+      idGot <- T
+      j <- j + 50
+    },
+    error = function(e)
+      cat("Network jitter", conditionMessage(e), "\n\n"),
+    finally = {
+      cat(j, "ids downloaded\r")
+    })
+  }
+  ids <-
+    bind_rows(ids,
+              data.frame(
+                genbankID = i,
+                uid = unlist(uid),
+                stringsAsFactors = F
+              ))
+}
+saveRDS(ids, file = "../temp/publicNCBItaxonomyIds.rds")
+ids <- readRDS("../temp/publicNCBItaxonomyIds.rds")
+
+#### from uid to lineage ####
+
+uniqueUID <- unique(ids$uid[!is.na(ids$uid)])
+lineage <- classification(uniqueUID, db = "ncbi")
+saveRDS(lineage, file = "../temp/publicNCBIlineage.rds")
+lineage <- readRDS("../temp/publicNCBIlineage.rds")
+uniqueUID <- names(lineage)
+getSpecies <- function(df) {
+  df$name[match(
+    c(
+      "superkingdom",
+      "phylum",
+      "class",
+      "order",
+      "family",
+      "genus",
+      "species"
+    ),
+    df$rank
+  )]
+}
+annotation2 <- sapply(lineage, getSpecies)
+annotation2 <-
+  cbind(
+    rank = c(
+      "superkingdom",
+      "phylum",
+      "class",
+      "order",
+      "family",
+      "genus",
+      "species"
+    ),
+    annotation2
+  )
+annotation2 <- t(annotation2)
+annotation2 <- as.data.frame(annotation2)
+colnames(annotation2) <- sapply(annotation2[1, ], as.character)
+annotation2 <- cbind(uniqueUID = uniqueUID, annotation2[-1, ])
+annotation2 <-
+  left_join(ids, annotation2, by = c("uid" = "uniqueUID"))
+saveRDS(annotation2, file = "../temp/publicNCBIspeciesAnnotation.rds")
+annotation3 <- annotation2[, c(1, 3, 4, 8)]
+colnames(annotation3) <- c("ID", "Kingdom", "Phylum", "Genus")
+```
+
+### Save species annotations in EXCEL
+
+```{r}
+library(xlsx)
+
+# https://www.kegg.jp/blastkoala/help_ghostkoala.html
+# Column1	User's gene id
+# Column2	K number assinged
+# Column3	Second level of the KEGG Organisms hierarchy
+# Column4	Third level of the KEGG Organisms hierarchy
+# Column5	Genus in the NCBI taxonomy
+# Column6	KEGG GENES ID
+# Column7	GHOSTX score
+df <-
+  read.table(
+    "../data/ncbi.user.out.top",
+    sep = "\t",
+    header = F,
+    stringsAsFactors = F
+  )
+df2 <-
+  read.table(
+    "../data/meta.user.out.top",
+    sep = "\t",
+    header = F,
+    stringsAsFactors = F
+  )
+df3 <- readRDS("../temp/ncbiMasterProtein.rds")
+df4 <- readRDS("../temp/metaMasterProtein.rds")
+# filter out proteins that are not found in any sample
+ncbi <- df[rowSums(df3[, 80:81] != "Not Found") > 0, c(1, 3:5)]
+colnames(ncbi) <- c("ID", "Second level ", "Third level", "Genus")
+ncbi$ID <- stringr::str_sub(ncbi$ID, 6)
+meta <- df2[rowSums(df4[, 173:174] != "Not Found") > 0, c(1, 3:5)]
+colnames(meta) <- c("ID", "Second level ", "Third level", "Genus")
+meta$ID <- stringr::str_sub(meta$ID, 6)
+write.xlsx2(
+  ncbi,
+  "../table/Species annotations of identified proteins.xlsx",
+  sheetName = "Public",
+  row.names = F
+)
+write.xlsx2(
+  meta,
+  "../table/Species annotations of identified proteins.xlsx",
+  sheetName = "Meta",
+  row.names = F,
+  append = T
+)
+```
+
+
+### Statistical comparison of microbial taxonomies identified by the two databases
+
+```{r Venn plot}
+
+library(VennDiagram)
+library(futile.logger)
+
+df3 <- readRDS("../temp/ncbiMasterProtein.rds")
+df4 <- readRDS("../temp/metaMasterProtein.rds")
+
+ncbi <- cbind(id = df3$Accession, df3[, 80:81], df[, c(3:5)])
+ncbi[, 2:3] <- ncbi[, 2:3] != "Not Found"
+meta <- cbind(id = df4$Accession, df4[, 173:174], df2[, 3:5])
+meta[, 2:3] <- meta[, 2:3] != "Not Found"
+ncbi <-
+  ncbi[(ncbi$`Found.in.Sample.Group:.high` + ncbi$`Found.in.Sample.Group:.low`) >
+         0, ]
+meta <-
+  meta[(meta$`Found.in.Sample.Group:.high` + meta$`Found.in.Sample.Group:.low`) >
+         0, ]
+ncbi <-
+  ncbi[ncbi$V3 == "Archaea" | ncbi$V3 == "Bacteria" |
+         ncbi$V3 == "Fungi", ]
+meta <-
+  meta[meta$V3 == "Archaea" | meta$V3 == "Bacteria" |
+         meta$V3 == "Fungi", ]
+# 579 and 854 genera were identified by Public DB and Meta DB respectively in total
+length(unique(ncbi$V5))
+length(unique(meta$V5))
+
+kingdom <- data.frame("Public database" = table(ncbi$V3),
+                      "Meta database" = table(meta$V3))
+kingdom <- kingdom[, c(2, 4)]
+colnames(kingdom) <- c("Public database", "Meta database")
+kingdom <- cbind(kingdom = c("Archaea", "Bacteria", "Fungi"), kingdom)
+write.xlsx(kingdom,
+                 "../table/Microbial Kingdoms indentified by the two databases.xlsx",
+                 row.names = F)
+# no log file
+flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+venn.diagram(
+  list(Public = ncbi$V5, Meta = meta$V5),
+  col = "white",
+  fill = c("#d37a20", "#dbcb09"),
+  lwd = .5,
+  filename = "../figure/Microbial species detected in two databases at the genus level.png",
+  cex = .5,
+  cat.cex = .5,
+  width = 1400,
+  height = 1200
+)
+venn.diagram(
+  list(Public = ncbi$V4, Meta = meta$V4),
+  col = "white",
+  fill = c("#d37a20", "#dbcb09"),
+  lwd = .5,
+  filename = "../figure/Microbial species detected in two databases at the third level of the KEGG Organisms hierarchy.png",
+  cex = .5,
+  cat.cex = .5,
+  width = 1400,
+  height = 1200
+)
+# 38.29% unique by Meta DB;8.98% unique by Public DB
+327 / 854 * 100
+52 / 579 * 100
+venn.diagram(
+  list(
+    HP = ncbi$V5[ncbi$`Found.in.Sample.Group:.high`],
+    LP = ncbi$V5[ncbi$`Found.in.Sample.Group:.low`],
+    HM = meta$V5[meta$`Found.in.Sample.Group:.high`],
+    LM = meta$V5[meta$`Found.in.Sample.Group:.low`]
+  ),
+  col = "white",
+  fill = c("#d37a20", "#dbcb09", "#3a9cbc", "#dd7208"),
+  lwd = .5,
+  filename = "../figure/HP-LP Microbial species detected in two databases at the genus level.png",
+  cex = .5,
+  cat.cex = .5,
+  width = 1200,
+  height = 1200
+)
+```
+
+```{r Stacked bar chart}
+
+library(tidyverse)
+library(ggplot2)
+
+ncbi <- cbind(id = df3$Accession, genus = df[, 5], df3[, 26:27])
+ncbi[is.na(ncbi)] <- 0
+ncbiGenus <- group_by(ncbi[, c(2, 3, 4)], genus) %>% summarise_all(sum)
+colnames(ncbiGenus) <- c("Genus", "High", "Low")
+ncbiGenus2 <- ncbiGenus
+# Sort from large total abundance to small total abundance
+ncbiGenus <-
+  ncbiGenus[sort(rowSums(ncbiGenus[, 2:3]),
+                 index.return = T,
+                 decreasing = T)$ix, ]
+# The abundance after top 10 are treated as others
+ncbiGenus <-
+  rbind(ncbiGenus[1:10, ],
+        data.frame(
+          Genus = "Others",
+          High = sum(ncbiGenus[11:nrow(ncbiGenus), 2]),
+          Low = sum(ncbiGenus[11:nrow(ncbiGenus), 3])
+        ),
+        stringsAsFactors = F)
+ncbiGenus[, 1] <- apply(ncbiGenus[, 1], 1, as.character)
+
+meta <- cbind(id = df4$Accession, genus = df2[, 5], df4[, 33:34])
+meta[is.na(meta)] <- 0
+metaGenus <- group_by(meta[, c(2, 3, 4)], genus) %>% summarise_all(sum)
+colnames(metaGenus) <- c("Genus", "High", "Low")
+metaGenus2 <- metaGenus
+metaGenus <-
+  metaGenus[sort(rowSums(metaGenus[, 2:3]),
+                 index.return = T,
+                 decreasing = T)$ix, ]
+metaGenus <-
+  rbind(metaGenus[1:10, ],
+        data.frame(
+          Genus = "Others",
+          High = sum(metaGenus[11:nrow(metaGenus), 2]),
+          Low = sum(metaGenus[11:nrow(metaGenus), 3])
+        ),
+        stringsAsFactors = F)
+metaGenus[, 1] <- apply(metaGenus[, 1], 1, as.character)
+
+# Merge two tables
+allGenus <-
+  cbind(rbind(ncbiGenus, metaGenus), Database = rep(c("Public", "Meta"), each =
+                                                      11))
+allGenus <- gather(allGenus, Phosphorus, Abundance, -Database, -Genus)
+allGenus$Database <-
+  factor(allGenus$Database, levels = c("Meta", "Public"))
+# sort from lowest abundance to highest abundance
+allGenus$Genus <- factor(allGenus$Genus,
+                         levels = (
+                           group_by(allGenus[, c(1, 4)], Genus) %>% summarise_all(sum) %>% arrange(Abundance)
+                         )$Genus)
+allGenus$Phosphorus[allGenus$Phosphorus == "High"] <- "P-rich"
+allGenus$Phosphorus[allGenus$Phosphorus == "Low"] <- "P-deficient"
+allGenus$Phosphorus <-
+  factor(allGenus$Phosphorus, levels = c("P-rich", "P-deficient"))
+# Stacked bar chart of abundance
+ggplot(allGenus) +
+  geom_bar(
+    aes(x = Database, y = Abundance, fill = Genus),
+    stat = "identity",
+    width = 0.5,
+    col = 'black'
+  ) +
+  facet_grid(cols = vars(Phosphorus)) +
+  theme(
+    axis.title.x = element_blank(),
+    text = element_text(size = 30),
+    axis.text = element_text(colour = "black"),
+    legend.text = element_text(face = "italic")
+  ) +
+  ggsave(
+    "../figure/Abundance of HP-LP Microbial species detected in two databases at the genus level.png",
+    width = 12,
+    height = 9,
+    dpi = 100
+  )
+
+# Stacked bar chart of abundance portion
+allGenus <-
+  group_by(allGenus, Database, Phosphorus) %>% mutate(Portion = round(prop.table(Abundance) *
+                                                                        100, 2))
+write.xlsx2(as.data.frame(allGenus),
+                  "../table/genus abundance and portion.xlsx",
+                  row.names = F)
+ggplot(allGenus) +
+  geom_bar(
+    aes(x = Database, y = Portion, fill = Genus),
+    stat = "identity",
+    width = 0.5,
+    col = 'black'
+  ) +
+  facet_grid(cols = vars(Phosphorus)) +
+  theme(
+    axis.title.x = element_blank(),
+    text = element_text(size = 30),
+    axis.text = element_text(colour = "black"),
+    legend.text = element_text(face = "italic")
+  ) +
+  ylab("Abundance (%)") +
+  ggsave(
+    "../figure/Abundance portion of HP-LP Microbial species detected in two databases at the genus level.png",
+    width = 12,
+    height = 9,
+    dpi = 100
+  )
+```
+
+```{r "Correlation of genera's abundance"}
+
+library(ggExtra)
+
+allGenus2 <- merge(metaGenus2, ncbiGenus2, by = "Genus", all = F)
+allGenus2[,-1] <- prop.table(as.matrix(allGenus2[,-1]), 2)
+ix <- (allGenus2$High.x + allGenus2$High.y) > 0
+cor.test(allGenus2$High.x, allGenus2$High.y)
+# t = 53.216, df = 534, p-value < 2.2e-16, cor 0.9172526
+cor.test(allGenus2$High.x[ix], allGenus2$High.y[ix])
+ix <- (allGenus2$Low.x + allGenus2$Low.y) > 0
+cor.test(allGenus2$Low.x, allGenus2$Low.y)
+# t = 45.092, df = 534, p-value < 2.2e-16, cor 0.8899416
+cor.test(allGenus2$Low.x[ix], allGenus2$Low.y[ix])
+minabundance <- c(allGenus2$High.x[ix], allGenus2$High.y[ix])
+minabundance <- min(minabundance[minabundance > 0])
+# median HP Meta 0.07 %,median HP Public 0.08 %
+median(allGenus2$High.x[ix]) * 100
+median(allGenus2$High.y[ix]) * 100
+p <-
+  ggplot(
+    data.frame(
+      x = allGenus2$High.x[ix] + minabundance,
+      y = allGenus2$High.y[ix] + minabundance
+    ) * 100,
+    aes(x = x, y = y)
+  ) +
+  geom_point(size = 3) +
+  geom_smooth(method = lm,
+              formula = y ~ x,
+              se = T) +
+  scale_x_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  scale_y_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  annotation_logticks() +
+  ylab("P-rich Public Abundance (%)") +
+  xlab("P-rich Meta Abundance (%)") +
+  theme(text = element_text(size = 30),
+        axis.text = element_text(colour = "black")) +
+  ggsave(
+    "../figure/Correlation of abundance identified by the two databases in HP.png",
+    width = 12,
+    height = 9,
+    dpi = 100
+  )
+p
+png(
+  file = "../figure/Correlation of abundance identified by the two databases in HP with histogram.png",
+  width = 1200,
+  height = 900,
+  units = "px"
+)
+ggMarginal(p, type = "histogram")
+dev.off()
+
+# median LP Meta 0.06 %, median LP Public 0.07 %
+median(allGenus2$Low.x[ix]) * 100
+median(allGenus2$Low.y[ix]) * 100
+p <-
+  ggplot(
+    data.frame(
+      x = allGenus2$Low.x[ix] + minabundance,
+      y = allGenus2$Low.y[ix] + minabundance
+    ) * 100,
+    aes(x = x, y = y)
+  ) +
+  geom_point(size = 3) +
+  geom_smooth(method = lm,
+              formula = y ~ x,
+              se = T) +
+  scale_x_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  scale_y_log10(
+    breaks = scales::trans_breaks("log10", function(x)
+      10 ^ x),
+    labels = scales::trans_format("log10", scales::math_format(10 ^ .x))
+  ) +
+  annotation_logticks() +
+  ylab("P-deficient Public Abundance (%)") +
+  xlab("P-deficient Meta Abundance (%)") +
+  theme(text = element_text(size = 30),
+        axis.text = element_text(colour = "black")) +
+  ggsave(
+    "../figure/Correlation of abundance identified by the two databases in LP.png",
+    width = 12,
+    height = 9,
+    dpi = 100
+  )
+p
+png(
+  file = "../figure/Correlation of abundance identified by the two databases in LP with histogram.png",
+  width = 1200,
+  height = 900,
+  units = "px"
+)
+ggMarginal(p, type = "histogram")
+dev.off()
+```
+
