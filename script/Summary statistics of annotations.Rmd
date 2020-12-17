@@ -26,6 +26,9 @@ ncbi <- read.table(
   quote = "\""
 )
 ncbi <- ncbi[ncbi$V3 %in% df$Accession, ]
+# EWC45899.1 can be found in ncbi nr now
+setdiff(df$Accession,ncbi$V3)
+df[df$Accession=="EWC45899.1","Sequence"]
 # 4,319 proteins were indentified by Public DB, 3,184 got GO annotations, or[BLASTED, MAPPED, ANNOTATED] and [BLASTED, MAPPED]
 # [BLASTED, MAPPED, ANNOTATED]            [BLASTED, MAPPED]                    [BLASTED]
 #                         3029                          155                         1135
@@ -78,7 +81,7 @@ sum(meta$V2 != "")
 ncbiB2gTag <- read.table(
   text = "
 Tag,Count
-Blasted,4319
+Blasted,4320
 Go Annotated,3184
 KEGG Annotated,2438",
 header = T,
