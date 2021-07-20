@@ -9,10 +9,7 @@ Yi Xiong
   - Meta proteomics analysis pipeline based on Proteome Discovery output
     💡
 
-  - Protein Sequence Databases Generated from Metagenomes and the Public
-    Database Reveal Similar Microbial Taxonomic and Functional Changes
-    in Soil Metaproteomics. XIONG Y, ZHENG L, MENG XX, SHEN RF, LAN P.
-    (in review) 🕐
+  - Xiong Yi, Zheng Lu, Meng Xiangxiang, et al. Protein sequence databases generated from metagenomics  and public database produced similar soil metaproteomic results of           microbial taxonomic and functional changes. Pedosphere, 2021 ✌️
     
       - Reproduce this study
 
